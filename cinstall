@@ -426,7 +426,7 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                 elif ! ddev drush status --fields=bootstrap 2>/dev/null | grep -q "Successful"; then
                     LAST_FAILED_STEP="8"
                     LAST_FAILED_STEP_NAME="Install Drupal/OpenSocial database"
-                elif [ -f "html/sites/default/settings.php" ] && ! grep -q "file_private_path" html/sites/default/settings.php; then
+                elif [ -f "html/sites/default/settings.php" ] && ! grep -q "\$settings\['file_private_path'\] =  '../private';" html/sites/default/settings.php; then
                     LAST_FAILED_STEP="8"
                     LAST_FAILED_STEP_NAME="Configure private file path"
                 elif ! ddev drush pml --status=enabled 2>/dev/null | grep -q "social_user"; then
@@ -690,7 +690,7 @@ if ! should_skip_step 7 && ask_step 7 "Install OpenSocial via Composer"; then
     
     # Add private file path to settings.php
     if [ -f "html/sites/default/settings.php" ]; then
-        if ! grep -q "file_private_path" html/sites/default/settings.php; then
+        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" html/sites/default/settings.php; then
             print_status "Adding private file path to settings.php..."
             cat >> html/sites/default/settings.php <<'PRIVATEOF'
 
@@ -775,7 +775,7 @@ if ! should_skip_step 8 && ask_step 8 "Install Drupal/OpenSocial database"; then
         print_status "Set $SETTINGS_FILE to writable (666)"
         
         # Add private file path BEFORE installation (OpenSocial checks this during install)
-        if ! grep -q "file_private_path" "$SETTINGS_FILE"; then
+        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
             print_status "Adding private file path to settings.php..."
             print_status "  File: $SETTINGS_ABS_PATH"
             print_status "  Adding: \$settings['file_private_path'] = '../private';"
@@ -839,7 +839,7 @@ DDEVEOF
         chmod 666 "$SETTINGS_FILE"
         
         # Re-check private file path (site:install might have modified settings.php)
-        if ! grep -q "file_private_path" "$SETTINGS_FILE"; then
+        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
             print_warning "Private file path was removed during installation. Re-adding..."
             print_status "  Re-adding to: $SETTINGS_ABS_PATH"
             cat >> "$SETTINGS_FILE" <<'PRIVATEOF2'
@@ -900,7 +900,7 @@ LOCALEOF
         
         # Verify final configuration
         print_status "Final verification of: $SETTINGS_ABS_PATH"
-        if grep -q "file_private_path" "$SETTINGS_FILE"; then
+        if grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
             print_status "  ✓ Private file path is configured"
         else
             print_error "  ✗ Private file path is missing!"
@@ -1060,7 +1060,7 @@ if ! should_skip_step 13 && ask_step 13 "Set up development settings (settings.l
 
     # Verify private file path in settings.php (should have been added in Step 8)
     if [ -f "$SETTINGS_FILE" ]; then
-        if ! grep -q "file_private_path" "$SETTINGS_FILE"; then
+        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
             print_warning "Private file path not found in settings.php. Adding it now..."
             print_status "  File: $SETTINGS_ABS_PATH"
             chmod 644 "$SETTINGS_FILE"
@@ -1151,7 +1151,7 @@ SETTINGSEOF
     
     # Final verification of private file path
     print_status "Final verification..."
-    if [ -f "$SETTINGS_FILE" ] && grep -q "file_private_path.*private" "$SETTINGS_FILE"; then
+    if [ -f "$SETTINGS_FILE" ] && grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
         print_status "  ✓ Private file path is properly configured in: $SETTINGS_ABS_PATH"
     else
         print_error "  ✗ Private file path is not properly configured!"
