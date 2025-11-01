@@ -3,6 +3,9 @@
 ################################################################################
 # OpenSocial (Drupal) Installation Script with DDEV on Ubuntu
 # This script automates the installation of OpenSocial using DDEV
+# MODIFICATIONS:
+# - OpenSocial stored within script directory
+# - Automatic URL conflict detection and resolution
 ################################################################################
 
 set -e  # Exit on any error
@@ -83,6 +86,40 @@ ask_step() {
     return 0  # Run
 }
 
+# Function to check if a DDEV URL is already in use
+is_url_in_use() {
+    local project_name=$1
+    local url="${project_name}.ddev.site"
+    
+    # Check if URL is already in use by another DDEV project
+    ddev list 2>/dev/null | grep -q "$url" && return 0 || return 1
+}
+
+# Function to find an available project name
+find_available_project_name() {
+    local base_name=$1
+    local counter=2
+    local test_name="$base_name"
+    
+    # Check if base name is available
+    if ! is_url_in_use "$test_name"; then
+        echo "$test_name"
+        return 0
+    fi
+    
+    # Try numbered variants
+    while is_url_in_use "${base_name}${counter}"; do
+        counter=$((counter + 1))
+        if [ $counter -gt 100 ]; then
+            print_error "Could not find available URL after 100 attempts"
+            exit 1
+        fi
+    done
+    
+    test_name="${base_name}${counter}"
+    echo "$test_name"
+}
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -104,6 +141,10 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 my-site 12.4.13                    # Custom project name and specific version"
             echo "  $0 my-site 13.0.0-beta1               # Install beta version"
             echo "  $0 -i my-site                         # Interactive with custom name"
+            echo ""
+            echo "MODIFICATIONS:"
+            echo "  - Project will be created in script directory"
+            echo "  - URL conflicts are automatically detected and resolved"
             exit 0
             ;;
         *)
@@ -128,9 +169,39 @@ if [[ ! "$ID" == "ubuntu" ]]; then
     fi
 fi
 
+# Get script directory - this is where we'll store the project
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+print_status "Script directory: $SCRIPT_DIR"
+
 # Configuration variables
-PROJECT_NAME="${1:-opensocial}"
+BASE_PROJECT_NAME="${1:-opensocial}"
 OPENSOCIAL_VERSION="${2:-dev-master}"  # Use dev-master for latest, or specific version like 12.4.13
+
+# Check for URL conflicts and find available name
+print_status "Checking for URL conflicts..."
+PROJECT_NAME=$(find_available_project_name "$BASE_PROJECT_NAME")
+
+if [ "$PROJECT_NAME" != "$BASE_PROJECT_NAME" ]; then
+    print_warning "URL '$BASE_PROJECT_NAME.ddev.site' is already in use by another DDEV project"
+    print_status "Using alternative name: $PROJECT_NAME"
+    print_status "Project URL will be: https://$PROJECT_NAME.ddev.site"
+    echo ""
+    read -p "Continue with this name? (Y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        read -p "Enter a different project name: " CUSTOM_NAME
+        if [ -n "$CUSTOM_NAME" ]; then
+            PROJECT_NAME=$(find_available_project_name "$CUSTOM_NAME")
+            if [ "$PROJECT_NAME" != "$CUSTOM_NAME" ]; then
+                print_warning "That name is also in use. Using: $PROJECT_NAME"
+            fi
+        else
+            print_error "No name provided. Exiting."
+            exit 1
+        fi
+    fi
+fi
+
 PHP_VERSION="8.2"
 MYSQL_VERSION="8.0"
 NODEJS_VERSION="18"
@@ -145,7 +216,9 @@ DEFAULT_COUNTRY="US"
 SITE_TIMEZONE="America/New_York"
 
 print_status "Starting OpenSocial installation with DDEV"
+print_status "Installation location: $SCRIPT_DIR/$PROJECT_NAME"
 print_status "Project name: $PROJECT_NAME"
+print_status "Project URL: https://$PROJECT_NAME.ddev.site"
 print_status "OpenSocial version: $OPENSOCIAL_VERSION"
 print_status "Note: Use 'dev-master' for latest, or specific versions like '12.4.13', '13.0.0-beta1'"
 echo ""
@@ -349,15 +422,17 @@ else
     print_skip "Skipping mkcert installation and configuration"
 fi
 
-# Step 4: Create project directory
+# Step 4: Create project directory in script directory
 if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
-    if [ -d "$PROJECT_NAME" ]; then
-        print_warning "Project directory '$PROJECT_NAME' already exists"
+    PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
+    
+    if [ -d "$PROJECT_PATH" ]; then
+        print_warning "Project directory '$PROJECT_PATH' already exists"
         
         # Check if it's a DDEV project
-        if [ -f "$PROJECT_NAME/.ddev/config.yaml" ]; then
+        if [ -f "$PROJECT_PATH/.ddev/config.yaml" ]; then
             # Check if the config file is corrupted
-            if ! ddev describe >/dev/null 2>&1 && grep -q "already defined" "$PROJECT_NAME/.ddev/config.yaml" 2>/dev/null; then
+            if ! ddev describe >/dev/null 2>&1 && grep -q "already defined" "$PROJECT_PATH/.ddev/config.yaml" 2>/dev/null; then
                 print_error "Detected corrupted DDEV configuration (duplicate keys in config.yaml)"
                 echo "Options:"
                 echo "  1) Fix configuration (remove duplicate keys)"
@@ -370,7 +445,7 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                 case $REPLY in
                     1)
                         print_status "Attempting to fix configuration..."
-                        cd "$PROJECT_NAME"
+                        cd "$PROJECT_PATH"
                         # Backup the corrupted config
                         cp .ddev/config.yaml .ddev/config.yaml.backup
                         # Remove lines after the first occurrence of duplicate keys
@@ -381,19 +456,19 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                         ;;
                     2)
                         print_status "Removing .ddev directory..."
-                        cd "$PROJECT_NAME"
+                        cd "$PROJECT_PATH"
                         rm -rf .ddev
                         print_status ".ddev directory removed. Will reconfigure."
                         ;;
                     3)
-                        print_warning "This will DELETE all data in $PROJECT_NAME"
+                        print_warning "This will DELETE all data in $PROJECT_PATH"
                         read -p "Are you absolutely sure? Type 'yes' to confirm: " confirmation
                         if [ "$confirmation" == "yes" ]; then
                             print_status "Deleting directory..."
-                            rm -rf "$PROJECT_NAME"
+                            rm -rf "$PROJECT_PATH"
                             print_status "Creating fresh project directory..."
-                            mkdir -p "$PROJECT_NAME"
-                            cd "$PROJECT_NAME"
+                            mkdir -p "$PROJECT_PATH"
+                            cd "$PROJECT_PATH"
                         else
                             print_error "Deletion cancelled. Exiting."
                             exit 1
@@ -412,7 +487,7 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                 print_status "This appears to be an existing DDEV project"
                 
                 # Detect which step failed or needs to be redone
-                cd "$PROJECT_NAME"
+                cd "$PROJECT_PATH"
                 LAST_FAILED_STEP=""
                 LAST_FAILED_STEP_NAME=""
                 
@@ -434,7 +509,7 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                     LAST_FAILED_STEP_NAME="Enable recommended modules"
                 fi
                 
-                cd ..
+                cd "$SCRIPT_DIR"
                 
                 echo "Options:"
                 if [ -n "$LAST_FAILED_STEP" ]; then
@@ -452,7 +527,7 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                     1)
                         if [ -n "$LAST_FAILED_STEP" ]; then
                             print_status "Resuming from Step $LAST_FAILED_STEP: $LAST_FAILED_STEP_NAME"
-                            cd "$PROJECT_NAME"
+                            cd "$PROJECT_PATH"
                             # Add the failed step to skip list so we DON'T skip it
                             # but skip all steps before it
                             for ((i=1; i<$LAST_FAILED_STEP; i++)); do
@@ -460,23 +535,23 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                             done
                         else
                             print_status "Continuing with existing project..."
-                            cd "$PROJECT_NAME"
+                            cd "$PROJECT_PATH"
                         fi
                         ;;
                     2)
-                        print_warning "This will DELETE all data in $PROJECT_NAME"
+                        print_warning "This will DELETE all data in $PROJECT_PATH"
                         read -p "Are you absolutely sure? Type 'yes' to confirm: " confirmation
                         if [ "$confirmation" == "yes" ]; then
                             print_status "Stopping DDEV if running..."
-                            cd "$PROJECT_NAME"
+                            cd "$PROJECT_PATH"
                             ddev stop 2>/dev/null || true
                             ddev delete -O 2>/dev/null || true
-                            cd ..
+                            cd "$SCRIPT_DIR"
                             print_status "Deleting directory..."
-                            rm -rf "$PROJECT_NAME"
+                            rm -rf "$PROJECT_PATH"
                             print_status "Creating fresh project directory..."
-                            mkdir -p "$PROJECT_NAME"
-                            cd "$PROJECT_NAME"
+                            mkdir -p "$PROJECT_PATH"
+                            cd "$PROJECT_PATH"
                         else
                             print_error "Deletion cancelled. Exiting."
                             exit 1
@@ -488,14 +563,19 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                             print_error "Project name cannot be empty. Exiting."
                             exit 1
                         fi
-                        PROJECT_NAME="$NEW_PROJECT_NAME"
+                        PROJECT_NAME=$(find_available_project_name "$NEW_PROJECT_NAME")
+                        if [ "$PROJECT_NAME" != "$NEW_PROJECT_NAME" ]; then
+                            print_warning "Name '$NEW_PROJECT_NAME' is in use. Using: $PROJECT_NAME"
+                        fi
+                        PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
                         print_status "Using new project name: $PROJECT_NAME"
-                        if [ -d "$PROJECT_NAME" ]; then
-                            print_error "Directory $PROJECT_NAME also exists. Please run the script again with a unique name."
+                        print_status "Project path: $PROJECT_PATH"
+                        if [ -d "$PROJECT_PATH" ]; then
+                            print_error "Directory $PROJECT_PATH also exists. Please run the script again with a unique name."
                             exit 1
                         fi
-                        mkdir -p "$PROJECT_NAME"
-                        cd "$PROJECT_NAME"
+                        mkdir -p "$PROJECT_PATH"
+                        cd "$PROJECT_PATH"
                         ;;
                     4)
                         print_status "Exiting..."
@@ -521,17 +601,17 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
             case $REPLY in
                 1)
                     print_status "Using existing directory..."
-                    cd "$PROJECT_NAME"
+                    cd "$PROJECT_PATH"
                     ;;
                 2)
-                    print_warning "This will DELETE all data in $PROJECT_NAME"
+                    print_warning "This will DELETE all data in $PROJECT_PATH"
                     read -p "Are you absolutely sure? Type 'yes' to confirm: " confirmation
                     if [ "$confirmation" == "yes" ]; then
                         print_status "Deleting directory..."
-                        rm -rf "$PROJECT_NAME"
+                        rm -rf "$PROJECT_PATH"
                         print_status "Creating fresh project directory..."
-                        mkdir -p "$PROJECT_NAME"
-                        cd "$PROJECT_NAME"
+                        mkdir -p "$PROJECT_PATH"
+                        cd "$PROJECT_PATH"
                     else
                         print_error "Deletion cancelled. Exiting."
                         exit 1
@@ -543,14 +623,19 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
                         print_error "Project name cannot be empty. Exiting."
                         exit 1
                     fi
-                    PROJECT_NAME="$NEW_PROJECT_NAME"
+                    PROJECT_NAME=$(find_available_project_name "$NEW_PROJECT_NAME")
+                    if [ "$PROJECT_NAME" != "$NEW_PROJECT_NAME" ]; then
+                        print_warning "Name '$NEW_PROJECT_NAME' is in use. Using: $PROJECT_NAME"
+                    fi
+                    PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
                     print_status "Using new project name: $PROJECT_NAME"
-                    if [ -d "$PROJECT_NAME" ]; then
-                        print_error "Directory $PROJECT_NAME also exists. Please run the script again with a unique name."
+                    print_status "Project path: $PROJECT_PATH"
+                    if [ -d "$PROJECT_PATH" ]; then
+                        print_error "Directory $PROJECT_PATH also exists. Please run the script again with a unique name."
                         exit 1
                     fi
-                    mkdir -p "$PROJECT_NAME"
-                    cd "$PROJECT_NAME"
+                    mkdir -p "$PROJECT_PATH"
+                    cd "$PROJECT_PATH"
                     ;;
                 4)
                     print_status "Exiting..."
@@ -563,16 +648,17 @@ if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
             esac
         fi
     else
-        print_status "Creating project directory..."
-        mkdir -p "$PROJECT_NAME"
-        cd "$PROJECT_NAME"
-        print_status "Project directory created: $PROJECT_NAME"
+        print_status "Creating project directory in script directory..."
+        mkdir -p "$PROJECT_PATH"
+        cd "$PROJECT_PATH"
+        print_status "Project directory created: $PROJECT_PATH"
     fi
 else
     print_skip "Skipping project directory creation"
-    if [ -d "$PROJECT_NAME" ]; then
-        cd "$PROJECT_NAME"
-        print_status "Changed to existing directory: $PROJECT_NAME"
+    PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
+    if [ -d "$PROJECT_PATH" ]; then
+        cd "$PROJECT_PATH"
+        print_status "Changed to existing directory: $PROJECT_PATH"
     else
         print_error "Project directory does not exist and step was skipped. Cannot continue."
         exit 1
@@ -1175,6 +1261,7 @@ print_status "=================================="
 print_status "OpenSocial installation complete!"
 print_status "=================================="
 echo ""
+print_status "Installation location: $SCRIPT_DIR/$PROJECT_NAME"
 print_status "Project URL: https://$PROJECT_NAME.ddev.site"
 print_status "Admin username: $ADMIN_USER"
 print_status "Admin password: $ADMIN_PASS"
