@@ -1,0 +1,462 @@
+
+Installing Open Social on Ubuntu
+Overview
+Open Social is a Drupal distribution for building online communities. This guide covers installation on Ubuntu using modern Docker.
+
+Prerequisites
+Before starting, ensure you have:
+
+A fresh Ubuntu installation (20.04 or newer)
+Sudo/administrative access
+At least 4GB RAM and 20GB free disk space
+Internet connection
+Server Requirements
+PHP 8.0 or 8.1 (depending on Open Social version)
+MySQL 5.7+ or MariaDB 10.3+
+Composer 2.x
+Docker and Docker Compose
+PHP extensions: curl, gd, mbstring, mysql, xml, zip, exif, intl, webp
+Open Social Version Compatibility
+Version	PHP 8.0	PHP 8.1	Drupal 9.4	Drupal 9.5	Drupal 10
+11.6.x	✅	❌	✅	❌	❌
+11.7.x	✅	❌	✅	❌	❌
+11.8.x	✅	❌	✅	❌	❌
+11.9.x	✅	❌	❌	✅	❌
+12.0.x	✅	✅	❌	✅	✅
+Installation Methods
+Method 1: Quick Installation (Recommended for Production)
+This method installs Open Social using Composer without Docker containers.
+
+Step 1: Install Prerequisites
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install required packages
+sudo apt install -y software-properties-common curl git
+
+# Add PHP repository
+sudo add-apt-repository ppa:ondrej/php -y
+sudo apt update
+
+# Install PHP 8.1 and extensions (use php8.0 for older Open Social versions)
+sudo apt install -y php8.1 php8.1-cli php8.1-common php8.1-curl \
+  php8.1-gd php8.1-mbstring php8.1-mysql php8.1-xml php8.1-zip \
+  php8.1-exif php8.1-intl php8.1-fpm
+
+# Verify PHP installation
+php --version
+Step 2: Install Composer
+# Download and install Composer
+cd ~
+curl -sS https://getcomposer.org/installer -o composer-setup.php
+sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+rm composer-setup.php
+
+# Verify installation
+composer --version
+Step 3: Install MySQL/MariaDB
+# Install MariaDB
+sudo apt install -y mariadb-server mariadb-client
+
+# Secure installation
+sudo mysql_secure_installation
+
+# Create database
+sudo mysql -e "CREATE DATABASE social CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+sudo mysql -e "CREATE USER 'social'@'localhost' IDENTIFIED BY 'your_secure_password';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON social.* TO 'social'@'localhost';"
+sudo mysql -e "FLUSH PRIVILEGES;"
+Step 4: Install Open Social
+# Disable cron during installation
+sudo systemctl stop cron
+
+# Create installation directory
+cd /var/www
+sudo composer create-project goalgorilla/social_template:dev-master social --no-interaction
+
+# Set permissions
+sudo chown -R www-data:www-data /var/www/social
+sudo chmod -R 755 /var/www/social
+Step 5: Install Drush and Complete Installation
+cd /var/www/social
+
+# Install via Drush
+sudo -u www-data drush -y site-install social \
+  --db-url=mysql://social:your_secure_password@localhost:3306/social \
+  --site-name="My Social Site" \
+  --account-name=admin \
+  --account-pass=admin_password
+
+# Re-enable cron
+sudo systemctl start cron
+Step 6: Configure Web Server
+Choose either Apache or Nginx:
+
+Option A: Nginx (Recommended)
+
+# Install Nginx and PHP-FPM
+sudo apt install -y nginx php8.1-fpm
+
+# Create server block
+sudo nano /etc/nginx/sites-available/social
+Add this configuration:
+
+server {
+    listen 80;
+    server_name social.local;
+    root /var/www/social/html;
+
+    index index.php index.html;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+    # Drupal specific configurations
+    location ~ ^/sites/.*/files/styles/ {
+        try_files $uri @rewrite;
+    }
+
+    location ~ ^(/[a-z\-]+)?/system/files/ {
+        try_files $uri /index.php?$query_string;
+    }
+
+    location @rewrite {
+        rewrite ^/(.*)$ /index.php?q=$1;
+    }
+
+    # Block access to protected files
+    location ~ ^/sites/.*/private/ {
+        return 403;
+    }
+
+    location ~ (^|/)\. {
+        return 403;
+    }
+}
+# Enable site
+sudo ln -s /etc/nginx/sites-available/social /etc/nginx/sites-enabled/
+
+# Test configuration
+sudo nginx -t
+
+# Restart services
+sudo systemctl restart nginx
+sudo systemctl restart php8.1-fpm
+
+# Add to hosts file
+echo "127.0.0.1 social.local" | sudo tee -a /etc/hosts
+Option B: Apache
+
+# Install Apache
+sudo apt install -y apache2 libapache2-mod-php8.1
+
+# Create virtual host
+sudo nano /etc/apache2/sites-available/social.conf
+Add this configuration:
+
+<VirtualHost *:80>
+    ServerName social.local
+    DocumentRoot /var/www/social/html
+
+    <Directory /var/www/social/html>
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/social_error.log
+    CustomLog ${APACHE_LOG_DIR}/social_access.log combined
+</VirtualHost>
+# Enable site and required modules
+sudo a2ensite social.conf
+sudo a2enmod rewrite
+sudo systemctl restart apache2
+
+# Add to hosts file
+echo "127.0.0.1 social.local" | sudo tee -a /etc/hosts
+Step 7: Post-Installation
+Visit http://social.local in your browser, then:
+
+Go to Administration → Reports → Status report
+Click "Rebuild permissions" to rebuild node access permissions
+Method 2: Docker Installation (For Development/Contributing)
+This method uses Docker containers for a complete development environment.
+
+Step 1: Install Docker
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Remove old Docker versions
+sudo apt remove docker docker-engine docker.io containerd runc
+
+# Install dependencies
+sudo apt install -y ca-certificates curl gnupg lsb-release
+
+# Add Docker's GPG key
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+# Add Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+
+# Add user to docker group
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Verify installation
+docker --version
+docker compose version
+Step 2: Install Additional Tools
+# Install Git
+sudo apt install -y git
+
+# Configure Git
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
+
+# Install Composer (needed for dependencies)
+curl -sS https://getcomposer.org/installer -o composer-setup.php
+sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+rm composer-setup.php
+Step 3: Clone Open Social Repository
+# Create directory
+mkdir -p ~/Sites
+cd ~/Sites
+
+# Clone repository
+git clone https://github.com/goalgorilla/drupal_social.git social
+cd social
+Step 4: Install Dependencies
+# Install PHP dependencies
+composer install
+This creates the html directory containing Drupal core and Open Social.
+
+Step 5: Start Nginx Proxy
+# Start the reverse proxy (must run first)
+docker run -d -p 80:80 --name=proxy \
+  -v /var/run/docker.sock:/tmp/docker.sock:ro \
+  nginxproxy/nginx-proxy
+
+# Verify it's running
+docker ps
+Step 6: Build and Start Containers
+# Build and start all containers
+docker-compose up -d
+
+# This will take several minutes on first run
+# Verify containers are running
+docker ps
+You should see containers for:
+
+social_web - Web server
+social_db - Database
+social_redis - Redis cache
+social_solr - Search server
+social_mailcatcher - Email testing
+social_cron - Cron jobs
+Step 7: Configure Hosts File
+# Add entries to hosts file
+echo "127.0.0.1 social.local" | sudo tee -a /etc/hosts
+echo "127.0.0.1 mailcatcher.social.local" | sudo tee -a /etc/hosts
+echo "127.0.0.1 solr.social.local" | sudo tee -a /etc/hosts
+
+# Verify entries
+cat /etc/hosts | grep social
+Step 8: Stop Cron During Installation
+# Stop cron container temporarily
+docker stop social_cron
+Step 9: Run Installation Script
+# Execute the installation script
+docker exec social_web bash /var/www/scripts/social/install/install_script.sh
+This script will:
+
+Install Drupal and Open Social
+Configure the database
+Set up initial content
+Configure Solr search
+The installation takes 5-10 minutes. Wait for it to complete.
+
+Step 10: Start Cron Container
+# Restart all containers including cron
+docker-compose up -d
+Step 11: Access Your Site
+Open your browser and navigate to:
+
+Main site: http://social.local
+Mailcatcher: http://mailcatcher.social.local (for testing emails)
+Solr admin: http://solr.social.local (search server admin)
+Step 12: Post-Installation Tasks
+Rebuild Permissions:
+
+Go to http://social.local/admin/reports/status
+Click the "Rebuild permissions" link
+Confirm the rebuild
+Login:
+
+The admin credentials are set during installation
+Check the installation script output for details
+Managing Your Docker Installation
+Common Commands
+# View running containers
+docker ps
+
+# View all containers (including stopped)
+docker ps -a
+
+# View logs
+docker-compose logs
+docker-compose logs -f web    # Follow logs for web container
+docker-compose logs -f db     # Follow logs for database
+
+# Stop containers
+docker-compose stop
+
+# Start containers
+docker-compose start
+
+# Restart containers
+docker-compose restart
+
+# Stop and remove containers
+docker-compose down
+
+# Stop and remove containers with volumes (WARNING: deletes data)
+docker-compose down -v
+
+# Access container shell
+docker exec -it social_web bash
+
+# Run Drush commands
+docker exec social_web drush status
+docker exec social_web drush cache:rebuild
+docker exec social_web drush user:login
+Updating Open Social
+cd ~/Sites/social
+
+# Pull latest changes
+git pull origin main
+
+# Update dependencies
+composer update
+
+# Restart containers
+docker-compose down
+docker-compose up -d
+
+# Run database updates
+docker exec social_web drush updatedb -y
+docker exec social_web drush cache:rebuild
+Troubleshooting
+Port 80 Already in Use
+# Check what's using port 80
+sudo lsof -i :80
+
+# If Apache is running
+sudo systemctl stop apache2
+sudo systemctl disable apache2
+
+# Or change the port in docker-compose.yml
+Cannot Access social.local
+Check hosts file:
+
+cat /etc/hosts | grep social
+Check containers are running:
+
+docker ps
+Check proxy container:
+
+docker ps | grep proxy
+docker logs proxy
+Try accessing by IP:
+
+http://127.0.0.1
+Containers Won't Start
+Check logs:
+
+docker-compose logs
+Check disk space:
+
+df -h
+Rebuild containers:
+
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+Database Connection Errors
+Check database container:
+
+docker ps | grep db
+docker logs social_db
+Access database:
+
+docker exec -it social_db mysql -u root -p
+Permission Errors
+# Fix ownership
+cd ~/Sites/social
+sudo chown -R $USER:$USER .
+
+# Fix permissions in container
+docker exec social_web chown -R www-data:www-data /var/www/html
+Clear All Docker Data and Start Fresh
+# WARNING: This removes ALL Docker data, not just Open Social
+docker-compose down -v
+docker rm -f proxy
+docker system prune -a --volumes
+
+# Then restart from Step 5 of Docker installation
+Performance Optimization
+Increase PHP Memory Limit
+For Docker installation: Edit docker-compose.yml and add to the web service:
+
+environment:
+  - PHP_MEMORY_LIMIT=512M
+Enable Redis Cache
+Redis is already configured in the Docker installation. To verify:
+
+docker exec social_web drush status | grep cache
+Configure Solr Search
+Solr is pre-configured in Docker. To rebuild the search index:
+
+docker exec social_web drush search-api:reindex
+docker exec social_web drush search-api:index
+Security Recommendations
+Change default passwords immediately
+Keep system updated:
+sudo apt update && sudo apt upgrade -ycomposer update
+Configure firewall:
+sudo ufw allow 80/tcpsudo ufw allow 443/tcpsudo ufw enable
+Use HTTPS in production (configure SSL certificates)
+Regular backups:
+# Backup databasedocker exec social_db mysqldump -u root -p social > backup.sql# Backup filestar -czf files-backup.tar.gz ~/Sites/social/html/sites/default/files
+Additional Resources
+Open Social Documentation: https://www.drupal.org/docs/drupal-distributions/open-social
+GitHub Repository: https://github.com/goalgorilla/drupal_social
+Drupal Documentation: https://www.drupal.org/documentation
+Docker Documentation: https://docs.docker.com/
+Getting Help
+If you encounter issues:
+
+Check the troubleshooting section above
+Review container logs: docker-compose logs
+Visit the Open Social issue queue on Drupal.org
+Check the GitHub issues page
+Remember to include relevant log output and system information when asking for help.
