@@ -1,0 +1,66 @@
+name: Test cinstall.sh
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test-osinstall:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60 
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Make cinstall.sh executable
+      run: chmod +x cinstall.sh
+    
+    - name: Test cinstall.sh syntax
+      run: bash -n cinstall.sh
+    
+    - name: Run cinstall.sh with dry-run (if supported)
+      run: |
+        # Test if the script runs without errors
+        # REMOVED: || echo "..." which was suppressing errors
+        # REMOVED: continue-on-error: true
+        set -e
+        timeout 300 bash -x osinstall.sh
+    
+    - name: Check for common issues
+      run: |
+        echo "Checking for common shell script issues..."
+        
+        # Check for unquoted variables
+        if grep -n '\$[A-Za-z_][A-Za-z0-9_]*[^"]' cinstall.sh | grep -v '#'; then
+          echo "Warning: Found potentially unquoted variables"
+        fi
+        
+        # Check for use of cd without error checking
+        if grep -n '^[[:space:]]*cd ' cinstall.sh | grep -v '||' | grep -v '&&'; then
+          echo "Warning: Found cd commands without error checking"
+        fi
+        
+        echo "Basic checks completed"
+    
+    - name: Run shellcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+        # REMOVED: || echo "..." which was suppressing errors
+        # REMOVED: continue-on-error: true
+        # Now shellcheck failures will actually fail the build
+        shellcheck cinstall.sh
+    
+    - name: Test script in Docker (Ubuntu 24.04)
+      run: |
+        docker run --rm -v ${{ github.workspace }}:/workspace ubuntu:24.04 bash -c "
+          cd /workspace &&
+          apt-get update &&
+          apt-get install -y sudo &&
+          bash -n cinstall.sh &&
+          echo 'Script syntax is valid'
+        "
