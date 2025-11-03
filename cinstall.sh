@@ -722,7 +722,7 @@ else
 fi
 
 # Step 7: Install Composer dependencies
-if ! should_skip_step 7 && ask_step 7 "Install OpenSocial via Composer"; then
+if ! should_skip_step 7 && ask_step 7 "Install OpenSocial (Commons version) via Composer"; then
     if [ -f "composer.json" ]; then
         print_skip "composer.json already exists. Skipping composer create."
         print_status "Running composer install to ensure dependencies are up to date..."
@@ -734,14 +734,14 @@ if ! should_skip_step 7 && ask_step 7 "Install OpenSocial via Composer"; then
         # For dev-master (latest development version)
         if [ "$OPENSOCIAL_VERSION" = "dev-master" ]; then
             print_status "Installing latest development version (dev-master)..."
-            ddev composer create-project goalgorilla/social_template:dev-master . --no-interaction --stability dev
+            ddev composer create-project rjzaar/commons_template:dev-master . --no-interaction --stability dev
         else
             # For specific version tags (e.g., 12.4.13, 13.0.0-beta1)
             print_status "Installing version $OPENSOCIAL_VERSION..."
-            ddev composer create-project goalgorilla/social_template:$OPENSOCIAL_VERSION . --no-interaction
+            ddev composer create-project rjzaar/commons_template:$OPENSOCIAL_VERSION . --no-interaction
         fi
         
-        print_status "OpenSocial Composer project created successfully"
+        print_status "OpenSocial (Commons version)  Composer project created successfully"
     fi
     
     # Ensure Drush is installed
