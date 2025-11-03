@@ -1550,25 +1550,7 @@ echo "  4. For production, disable development settings in settings.local.php"
 echo "  5. Review and configure workflow settings as needed"
 
 # Optional: Launch the site in browser and open to the test page
-echo ""
-read -p "Do you want to launch the site and open the admin login now? (y/N) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    print_status "Opening admin login in browser..."
-    if [ -n "$ADMIN_LOGIN_URL" ] && [[ "$ADMIN_LOGIN_URL" == http* ]]; then
-        ddev launch "$ADMIN_LOGIN_URL"
-    else
-        ddev launch
-        echo ""
-        print_status "Please use this one-time login link:"
-        echo -e "${GREEN}$ADMIN_LOGIN_URL${NC}"
-    fi
-fi
+print_status "Opening admin login in browser..."
+ddev drush uli
 
 print_status "Installation script completed successfully!"
-echo ""
-print_status "Next steps:"
-echo "  1. Log in using the one-time login link"
-echo "  2. Navigate to the test page to see workflow in action"
-echo "  3. Configure additional workflow settings as needed"
-echo "  4. Start building your community!"
