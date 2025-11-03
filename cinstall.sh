@@ -1050,27 +1050,7 @@ LOCALEOF
 else
     print_skip "Skipping Drupal/OpenSocial installation"
 fi
-# Step 8.5: Uninstall Ultimate Cron (compatibility fix)
-if ! should_skip_step "8.5" && ask_step "8.5" "Uninstall Ultimate Cron module"; then
-    step_header "8.5" "Uninstall Ultimate Cron Module"
-    print_status "Checking for Ultimate Cron module..."
-    
-    if ddev drush pml --status=enabled 2>/dev/null | grep -q "ultimate_cron"; then
-        print_warning "Ultimate Cron module detected - causes Drush compatibility issues"
-        print_status "Uninstalling Ultimate Cron module..."
-        
-        # Uninstall the module
-        ddev drush pm:uninstall ultimate_cron -y 2>/dev/null || true
-        
-        print_status "✓ Ultimate Cron module uninstalled"
-    else
-        print_skip "Ultimate Cron module not found or already uninstalled"
-    fi
-    
-    step_complete "8.5" "Ultimate Cron compatibility fix applied"
-else
-    print_skip "Skipping Ultimate Cron compatibility fix"
-fi
+
 # Step 9: Configure site settings
 if ! should_skip_step 9 && ask_step 9 "Configure site settings"; then
     step_header 9 "Configure Site Settings"
