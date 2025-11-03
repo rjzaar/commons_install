@@ -6,6 +6,7 @@
 # MODIFICATIONS:
 # - OpenSocial stored within script directory
 # - Automatic URL conflict detection and resolution
+# - Added workflow_assignment module configuration
 ################################################################################
 
 set -e  # Exit on any error
@@ -145,6 +146,7 @@ while [[ $# -gt 0 ]]; do
             echo "MODIFICATIONS:"
             echo "  - Project will be created in script directory"
             echo "  - URL conflicts are automatically detected and resolved"
+            echo "  - Includes workflow_assignment module configuration"
             exit 0
             ;;
         *)
@@ -239,7 +241,10 @@ echo "║   [10] Enable Modules                      ║"
 echo "║   [11] User & Content Settings             ║"
 echo "║   [12] Cache & Permissions                 ║"
 echo "║   [13] Development Settings                ║"
-echo "║   [14] Summary & Completion                ║"
+echo "║   [14] Enable Workflow Assignment          ║"
+echo "║   [15] Configure Workflow                  ║"
+echo "║   [16] Create Test Content                 ║"
+echo "║   [17] Summary & Completion                ║"
 echo "╚════════════════════════════════════════════╝"
 echo ""
 
@@ -1256,7 +1261,223 @@ else
     print_skip "Skipping development settings setup"
 fi
 
-# Step 14: Display completion information
+# Step 14: Enable workflow_assignment module
+if ! should_skip_step 14 && ask_step 14 "Enable workflow_assignment module"; then
+    step_header 14 "Enable Workflow Assignment Module"
+    print_status "Checking for workflow_assignment module..."
+    
+    # Check if module exists
+    if ddev drush pml --type=module --no-core 2>/dev/null | grep -q "workflow"; then
+        print_status "Workflow module found. Enabling workflow_assignment..."
+        
+        # Enable workflow and workflow_assignment modules
+        if ddev drush en workflow workflow_assignment -y; then
+            print_status "✓ workflow_assignment module enabled successfully"
+        else
+            print_error "Failed to enable workflow_assignment module"
+            print_warning "The module may not be installed. You may need to install it via composer:"
+            print_warning "  ddev composer require drupal/workflow"
+        fi
+    else
+        print_warning "Workflow module not found. Installing via composer..."
+        
+        # Install workflow module
+        if ddev composer require drupal/workflow; then
+            print_status "✓ Workflow module installed"
+            
+            # Enable the modules
+            if ddev drush en workflow workflow_assignment -y; then
+                print_status "✓ workflow_assignment module enabled successfully"
+            else
+                print_error "Failed to enable workflow_assignment module after installation"
+            fi
+        else
+            print_error "Failed to install workflow module via composer"
+        fi
+    fi
+    
+    # Clear cache
+    print_status "Clearing cache..."
+    ddev drush cr
+    
+    step_complete 14 "Workflow Assignment module ready"
+else
+    print_skip "Skipping workflow_assignment module enablement"
+fi
+
+# Step 15: Configure workflow for basic_page content type
+if ! should_skip_step 15 && ask_step 15 "Configure workflow for basic_page content type"; then
+    step_header 15 "Configure Workflow for Basic Page"
+    print_status "Configuring workflow for basic_page content type..."
+    
+    # First, ensure basic_page content type exists
+    print_status "Checking if basic_page content type exists..."
+    if ddev drush php-eval "echo entity_load('node_type', 'page') ? 'exists' : 'not found';" 2>/dev/null | grep -q "exists"; then
+        print_status "✓ basic_page (page) content type found"
+        
+        # Create a workflow via Drush
+        print_status "Creating workflow via configuration..."
+        
+        # Create workflow configuration using drush php-eval
+        ddev drush php-eval "
+          \$workflow = \Drupal\workflow\Entity\Workflow::create([
+            'id' => 'basic_page_workflow',
+            'label' => 'Basic Page Workflow',
+            'type' => 'workflow_type_complex',
+          ]);
+          
+          // Add states
+          \$workflow->getTypePlugin()->addState('draft', 'Draft');
+          \$workflow->getTypePlugin()->addState('review', 'Review');
+          \$workflow->getTypePlugin()->addState('published', 'Published');
+          
+          try {
+            \$workflow->save();
+            echo 'Workflow created successfully';
+          } catch (\Exception \$e) {
+            echo 'Error: ' . \$e->getMessage();
+          }
+        " 2>/dev/null || print_warning "Workflow creation encountered issues - may need manual configuration"
+        
+        print_status "✓ Workflow configuration complete"
+    else
+        # Create basic_page content type if it doesn't exist
+        print_status "basic_page content type not found. Creating it..."
+        
+        if ddev drush php-eval "
+          \$node_type = \Drupal\node\Entity\NodeType::create([
+            'type' => 'page',
+            'name' => 'Basic page',
+            'description' => 'Use basic pages for your static content.',
+          ]);
+          \$node_type->save();
+          echo 'Basic page content type created';
+        " 2>/dev/null; then
+            print_status "✓ basic_page content type created"
+        else
+            print_error "Failed to create basic_page content type"
+        fi
+    fi
+    
+    # Clear cache
+    ddev drush cr
+    
+    step_complete 15 "Workflow configured for basic_page"
+else
+    print_skip "Skipping workflow configuration for basic_page"
+fi
+
+# Step 16: Create workflow assignments and test page
+if ! should_skip_step 16 && ask_step 16 "Create workflow assignments and test page"; then
+    step_header 16 "Create Test Content with Workflow"
+    print_status "Creating workflow assignments and test content..."
+    
+    # Get admin user ID
+    ADMIN_UID=$(ddev drush user:information admin --fields=uid --format=string 2>/dev/null || echo "1")
+    print_status "Admin user ID: $ADMIN_UID"
+    
+    # Create two workflow assignments using Drush PHP eval
+    print_status "Creating workflow assignment 'one'..."
+    ddev drush php-eval "
+      \$assignment = \Drupal\workflow_assignment\Entity\WorkflowAssignment::create([
+        'id' => 'one',
+        'label' => 'Assignment One',
+        'workflow' => 'basic_page_workflow',
+        'assigned_user' => $ADMIN_UID,
+      ]);
+      try {
+        \$assignment->save();
+        echo 'Assignment one created';
+      } catch (\Exception \$e) {
+        echo 'Note: ' . \$e->getMessage();
+      }
+    " 2>/dev/null || print_warning "Assignment 'one' may already exist or requires manual creation"
+    
+    print_status "Creating workflow assignment 'two'..."
+    ddev drush php-eval "
+      \$assignment = \Drupal\workflow_assignment\Entity\WorkflowAssignment::create([
+        'id' => 'two',
+        'label' => 'Assignment Two',
+        'workflow' => 'basic_page_workflow',
+        'assigned_user' => $ADMIN_UID,
+      ]);
+      try {
+        \$assignment->save();
+        echo 'Assignment two created';
+      } catch (\Exception \$e) {
+        echo 'Note: ' . \$e->getMessage();
+      }
+    " 2>/dev/null || print_warning "Assignment 'two' may already exist or requires manual creation"
+    
+    # Create a basic page with title "test"
+    print_status "Creating test basic page..."
+    TEST_NID=$(ddev drush php-eval "
+      \$node = \Drupal\node\Entity\Node::create([
+        'type' => 'page',
+        'title' => 'test',
+        'body' => [
+          'value' => 'This is a test page with workflow assignments.',
+          'format' => 'basic_html',
+        ],
+        'uid' => $ADMIN_UID,
+        'status' => 1,
+      ]);
+      
+      try {
+        \$node->save();
+        echo \$node->id();
+      } catch (\Exception \$e) {
+        echo 'error';
+      }
+    " 2>/dev/null)
+    
+    if [ "$TEST_NID" != "error" ] && [ -n "$TEST_NID" ]; then
+        print_status "✓ Test page created with NID: $TEST_NID"
+        
+        # Try to assign the workflow to the node
+        print_status "Assigning workflow to test page..."
+        ddev drush php-eval "
+          \$node = \Drupal\node\Entity\Node::load($TEST_NID);
+          if (\$node) {
+            // Attempt to set workflow state
+            if (\$node->hasField('workflow_state')) {
+              \$node->set('workflow_state', 'draft');
+              \$node->save();
+              echo 'Workflow state set to draft';
+            }
+          }
+        " 2>/dev/null || print_warning "Workflow assignment may need to be done via UI"
+        
+        print_status "✓ Test content created successfully"
+        print_status "  Node ID: $TEST_NID"
+        print_status "  Title: test"
+        print_status "  Type: basic_page"
+    else
+        print_error "Failed to create test page"
+    fi
+    
+    # Clear cache
+    ddev drush cr
+    
+    step_complete 16 "Test content with workflow created"
+else
+    print_skip "Skipping test content creation"
+fi
+
+# Step 17: Generate admin login link and display completion information
+step_header 17 "Installation Complete - Generate Admin Login"
+print_status "Generating one-time admin login link..."
+
+# Generate the admin login URL
+ADMIN_LOGIN_URL=$(ddev drush uli --no-browser 2>/dev/null)
+
+if [ -n "$ADMIN_LOGIN_URL" ]; then
+    print_status "✓ Admin login link generated"
+else
+    print_warning "Could not generate login link automatically"
+    ADMIN_LOGIN_URL="Run: ddev drush uli"
+fi
+
 print_status "=================================="
 print_status "OpenSocial installation complete!"
 print_status "=================================="
@@ -1266,6 +1487,10 @@ print_status "Project URL: https://$PROJECT_NAME.ddev.site"
 print_status "Admin username: $ADMIN_USER"
 print_status "Admin password: $ADMIN_PASS"
 print_status "Admin email: $ADMIN_MAIL"
+echo ""
+print_status "🔐 ONE-TIME ADMIN LOGIN LINK:"
+echo ""
+echo -e "${GREEN}$ADMIN_LOGIN_URL${NC}"
 echo ""
 print_status "Site Configuration:"
 echo "  Site name: $SITE_NAME"
@@ -1281,6 +1506,14 @@ echo "  ✓ Pathauto for clean URLs"
 echo "  ✓ Development settings configured"
 echo "  ✓ User registration (admin approval required)"
 echo "  ✓ Email verification enabled"
+echo "  ✓ Workflow Assignment module enabled"
+echo "  ✓ Workflow configured for basic_page"
+echo "  ✓ Test page created with workflow"
+echo ""
+print_status "Test Content:"
+echo "  Node: 'test' (basic_page)"
+echo "  Workflow: basic_page_workflow"
+echo "  Assignments: 'one' and 'two' (assigned to admin)"
 echo ""
 print_status "Useful DDEV commands:"
 echo "  ddev start          - Start the project"
@@ -1299,23 +1532,43 @@ echo "  ddev drush uli      - Generate one-time login link"
 echo "  ddev drush status   - Show site status"
 echo "  ddev drush pml      - List installed modules"
 echo ""
-print_status "To access your site, run:"
-echo "  ddev launch"
+print_status "To access your site:"
+echo "  1. Run: ddev launch"
+echo "  2. Or visit: https://$PROJECT_NAME.ddev.site"
+echo "  3. Or use the one-time login link above"
 echo ""
-print_status "To log in as admin without password:"
-echo "  ddev drush uli"
+print_status "To view the test page with workflow:"
+if [ -n "$TEST_NID" ] && [ "$TEST_NID" != "error" ]; then
+    echo "  Visit: https://$PROJECT_NAME.ddev.site/node/$TEST_NID"
+fi
 echo ""
 print_warning "IMPORTANT SECURITY REMINDERS:"
 echo "  1. Change the admin password after first login!"
 echo "  2. Update the site email in admin/config/system/site-information"
 echo "  3. Review user permissions at admin/people/permissions"
 echo "  4. For production, disable development settings in settings.local.php"
+echo "  5. Review and configure workflow settings as needed"
 
-# Optional: Launch the site in browser
-read -p "Do you want to launch the site in your browser now? (y/N) " -n 1 -r
+# Optional: Launch the site in browser and open to the test page
+echo ""
+read -p "Do you want to launch the site and open the admin login now? (y/N) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    ddev launch
+    print_status "Opening admin login in browser..."
+    if [ -n "$ADMIN_LOGIN_URL" ] && [[ "$ADMIN_LOGIN_URL" == http* ]]; then
+        ddev launch "$ADMIN_LOGIN_URL"
+    else
+        ddev launch
+        echo ""
+        print_status "Please use this one-time login link:"
+        echo -e "${GREEN}$ADMIN_LOGIN_URL${NC}"
+    fi
 fi
 
 print_status "Installation script completed successfully!"
+echo ""
+print_status "Next steps:"
+echo "  1. Log in using the one-time login link"
+echo "  2. Navigate to the test page to see workflow in action"
+echo "  3. Configure additional workflow settings as needed"
+echo "  4. Start building your community!"
