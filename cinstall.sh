@@ -812,30 +812,6 @@ else
     print_skip "Skipping Composer dependencies installation"
 fi
 
-# Step 7.5: Pre-installation cleanup
-print_status "Checking for known problematic modules before installation..."
-
-# Remove ultimate_cron if it exists in composer.json
-if [ -f "composer.json" ]; then
-    if grep -q "ultimate_cron" composer.json; then
-        print_warning "Ultimate Cron found in composer.json, removing..."
-        ddev composer remove drupal/ultimate_cron --no-update 2>/dev/null || true
-        ddev composer update --lock 2>/dev/null || true
-    fi
-fi
-
-# Check if ultimate_cron exists in the codebase
-if [ -d "html/modules/contrib/ultimate_cron" ]; then
-    print_warning "Ultimate Cron found in modules directory, removing..."
-    rm -rf html/modules/contrib/ultimate_cron
-fi
-
-# Add ultimate_cron to composer conflict to prevent accidental installation
-if [ -f "composer.json" ] && ! grep -q '"drupal/ultimate_cron".*"\*"' composer.json; then
-    print_status "Adding Ultimate Cron to composer conflicts..."
-    ddev composer config conflict.drupal/ultimate_cron "*" 2>/dev/null || true
-fi
-
 # Step 8: Install Drupal/OpenSocial
 if ! should_skip_step 8 && ask_step 8 "Install Drupal/OpenSocial database"; then
     # Check if Drupal is already installed
