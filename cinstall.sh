@@ -1050,31 +1050,93 @@ fi
 # Step 9: Configure site settings
 if ! should_skip_step 9 && ask_step 9 "Configure site settings"; then
     step_header 9 "Configure Site Settings"
+    
+    # CRITICAL: Check and remove Ultimate Cron FIRST before any config operations
+    print_status "Pre-check: Checking for incompatible modules..."
+    
+    # Check if Ultimate Cron is installed/enabled
+    if ddev drush pml 2>/dev/null | grep -q "ultimate_cron"; then
+        print_warning "Ultimate Cron detected - this module causes Drush compatibility issues"
+        print_status "Removing Ultimate Cron to prevent configuration errors..."
+        
+        # Try to uninstall the module
+        if ddev drush pm:uninstall ultimate_cron -y 2>/dev/null; then
+            print_status "✓ Ultimate Cron uninstalled successfully"
+        else
+            print_warning "Could not uninstall via Drush, attempting database removal..."
+            
+            # Force remove from database if Drush fails
+            ddev drush sqlq "DELETE FROM config WHERE name LIKE 'ultimate_cron%';" 2>/dev/null || true
+            ddev drush sqlq "DELETE FROM key_value WHERE collection = 'system.schema' AND name = 'ultimate_cron';" 2>/dev/null || true
+        fi
+        
+        # Also remove from filesystem if present
+        if [ -d "html/modules/contrib/ultimate_cron" ]; then
+            print_status "Removing Ultimate Cron from filesystem..."
+            rm -rf html/modules/contrib/ultimate_cron
+        fi
+        
+        # Clear cache after removal
+        ddev drush cr 2>/dev/null || true
+        print_status "✓ Ultimate Cron compatibility issue resolved"
+    fi
+    
+    # Now configure site settings with better error handling
     print_status "Configuring site settings..."
-
+    
+    # Function to safely run config commands
+    safe_config_set() {
+        local config_path=$1
+        local value=$2
+        local description=$3
+        
+        if ddev drush config:set "$config_path" "$value" --yes 2>/dev/null; then
+            print_status "✓ Set $description"
+            return 0
+        else
+            print_warning "Could not set $description (may already be configured)"
+            return 1
+        fi
+    }
+    
     # Set timezone
     print_status "Setting timezone to $SITE_TIMEZONE..."
-    ddev drush config:set system.date timezone.default "$SITE_TIMEZONE" --yes 2>/dev/null || print_warning "Could not set timezone (may already be configured)"
-
-    # Set date formats
+    safe_config_set "system.date timezone.default" "$SITE_TIMEZONE" "timezone"
+    
+    # Set date formats  
     print_status "Configuring date settings..."
-    ddev drush config:set system.date timezone.user.configurable 1 --yes 2>/dev/null || print_warning "Could not set user timezone configuration"
-
+    safe_config_set "system.date timezone.user.configurable" "1" "user timezone configuration"
+    
     # Configure file system settings
     print_status "Configuring file system paths..."
-    ddev drush config:set system.file path.temporary "/tmp" --yes 2>/dev/null || print_warning "Could not set temporary path"
-
-    # Enable clean URLs (should be default, but making sure)
+    safe_config_set "system.file path.temporary" "/tmp" "temporary file path"
+    
+    # Configure performance settings
     print_status "Configuring performance settings..."
-    ddev drush config:set system.performance css.preprocess 1 --yes 2>/dev/null || print_warning "Could not set CSS preprocessing"
-    ddev drush config:set system.performance js.preprocess 1 --yes 2>/dev/null || print_warning "Could not set JS preprocessing"
-
-    # Configure error logging (development settings)
+    safe_config_set "system.performance css.preprocess" "1" "CSS preprocessing"
+    safe_config_set "system.performance js.preprocess" "1" "JS preprocessing"
+    
+    # Configure error logging
     print_status "Configuring error logging..."
-    ddev drush config:set system.logging error_level verbose --yes 2>/dev/null || print_warning "Could not set error level"
+    safe_config_set "system.logging error_level" "verbose" "error level"
+    
+    # Additional safety: disable Ultimate Cron via settings if it persists
+    print_status "Adding Ultimate Cron blocking to settings..."
+    SETTINGS_FILE="html/sites/default/settings.php"
+    if [ -f "$SETTINGS_FILE" ]; then
+        if ! grep -q "ultimate_cron.*uninstall" "$SETTINGS_FILE"; then
+            chmod 644 "$SETTINGS_FILE" 2>/dev/null || true
+            cat >> "$SETTINGS_FILE" <<'BLOCKEOF'
 
-    # Note: automated_cron.settings doesn't exist in OpenSocial by default
-    # Cron is configured through DDEV or system cron instead
+/**
+ * Force disable Ultimate Cron module to prevent Drush conflicts
+ */
+$settings['extension.blacklist']['ultimate_cron'] = TRUE;
+BLOCKEOF
+            chmod 444 "$SETTINGS_FILE" 2>/dev/null || true
+            print_status "✓ Added Ultimate Cron blocking to settings.php"
+        fi
+    fi
     
     step_complete 9 "Site settings configured"
 else
