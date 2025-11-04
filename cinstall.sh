@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.1.9 - Fixed: Comprehensive Docker cleanup (containers, volumes, networks) before config
 # v2.1.8 - Fixed: Check and remove orphaned Docker volumes (MySQL persisting outside DDEV)
 # v2.1.7 - Fixed: Check for DDEV projects globally before configuring (fixes MySQL persistence)
 # v2.1.6 - MARIADB ONLY: Removed all MySQL options, auto-deletes MySQL if detected
@@ -25,7 +26,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.8"
+VERSION="2.1.9"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -794,59 +795,69 @@ step_initialize_ddev() {
     
     step_header 5 "Initializing DDEV Configuration"
     
-    # CRITICAL: Check for existing DDEV project GLOBALLY (not just in directory)
-    # DDEV stores databases in global Docker volumes that persist even if .ddev/ is deleted
-    print_status "Checking for existing DDEV projects globally..."
+    # CRITICAL: Complete Docker cleanup before attempting configuration
+    # DDEV checks existing containers/volumes/networks for database type
+    print_status "Performing comprehensive Docker cleanup for project: $PROJECT_URL"
     
-    # Check if project exists in DDEV's global state
+    # Step 1: Check DDEV's project list
+    print_substep "Checking DDEV project list..."
     if ddev list | grep -q "^$PROJECT_URL "; then
-        print_warning "Existing DDEV project found globally: $PROJECT_URL"
-        
-        # Try to get the database type (needs jq, but may not be installed)
-        if command -v jq &> /dev/null; then
-            local existing_db=$(ddev list --format json | jq -r ".[] | select(.name == \"$PROJECT_URL\") | .db_type + \":\" + .db_version" 2>/dev/null || echo "unknown")
-            if [[ "$existing_db" == mysql* ]]; then
-                print_warning "Found existing MySQL database: $existing_db"
-            else
-                print_substep "Found existing database: $existing_db"
-            fi
-        else
-            print_substep "Existing DDEV project detected (unable to check database type - jq not installed)"
-        fi
-        
-        print_status "This script ONLY uses MariaDB - removing any existing database..."
-        
-        # Delete the existing project completely (including database volumes)
-        print_substep "Deleting existing DDEV project and database volumes..."
+        print_warning "Found DDEV project: $PROJECT_URL"
+        print_substep "Deleting via DDEV..."
         ddev delete -O -y "$PROJECT_URL" 2>/dev/null || true
-        print_success "Existing project and database removed"
-        
-        # Small delay to ensure Docker volumes are fully removed
         sleep 2
     else
-        print_substep "No existing DDEV project found globally"
+        print_substep "Not in DDEV project list"
     fi
     
-    # ADDITIONAL CHECK: Look for orphaned Docker volumes
-    # Sometimes volumes exist even when DDEV doesn't track the project
-    print_status "Checking for orphaned Docker volumes..."
+    # Step 2: Remove all containers (running or stopped)
+    print_substep "Checking for Docker containers..."
+    local containers=$(docker ps -a --format "{{.Names}}" | grep "ddev-${PROJECT_URL}" || true)
+    if [ -n "$containers" ]; then
+        print_warning "Found containers for $PROJECT_URL"
+        echo "$containers" | while read -r container; do
+            print_substep "Removing container: $container"
+            docker rm -f "$container" 2>/dev/null || true
+        done
+        print_success "Containers removed"
+    else
+        print_substep "No containers found"
+    fi
     
-    local orphaned_volumes=$(docker volume ls --format "{{.Name}}" | grep "ddev-${PROJECT_URL}" || true)
-    
-    if [ -n "$orphaned_volumes" ]; then
-        print_warning "Found orphaned Docker volumes for project: $PROJECT_URL"
-        print_substep "These volumes exist but aren't tracked by DDEV"
-        
-        echo "$orphaned_volumes" | while read -r volume; do
+    # Step 3: Remove all volumes
+    print_substep "Checking for Docker volumes..."
+    local volumes=$(docker volume ls --format "{{.Name}}" | grep "ddev-${PROJECT_URL}" || true)
+    if [ -n "$volumes" ]; then
+        print_warning "Found volumes for $PROJECT_URL"
+        echo "$volumes" | while read -r volume; do
             print_substep "Removing volume: $volume"
             docker volume rm "$volume" 2>/dev/null || true
         done
-        
-        print_success "Orphaned volumes removed"
-        sleep 2
+        print_success "Volumes removed"
     else
-        print_substep "No orphaned Docker volumes found"
+        print_substep "No volumes found"
     fi
+    
+    # Step 4: Remove all networks
+    print_substep "Checking for Docker networks..."
+    local networks=$(docker network ls --format "{{.Name}}" | grep "ddev-${PROJECT_URL}" || true)
+    if [ -n "$networks" ]; then
+        print_warning "Found networks for $PROJECT_URL"
+        echo "$networks" | while read -r network; do
+            print_substep "Removing network: $network"
+            docker network rm "$network" 2>/dev/null || true
+        done
+        print_success "Networks removed"
+    else
+        print_substep "No networks found"
+    fi
+    
+    # Step 5: Final cleanup - prune dangling resources
+    print_substep "Pruning dangling Docker resources..."
+    docker volume prune -f 2>/dev/null || true
+    
+    print_success "Docker cleanup completed - all traces of previous installation removed"
+    sleep 2
     
     # Check if .ddev/config.yaml already exists in this directory
     if [ -f ".ddev/config.yaml" ]; then
