@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.1.7 - Fixed: Check for DDEV projects globally before configuring (fixes MySQL persistence)
 # v2.1.6 - MARIADB ONLY: Removed all MySQL options, auto-deletes MySQL if detected
 # v2.1.5 - Added detection of existing database type, prevents forced migration errors
 # v2.1.4 - Fixed Step 5 to verify project type and database, not just project name
@@ -23,7 +24,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.6"
+VERSION="2.1.7"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -792,78 +793,66 @@ step_initialize_ddev() {
     
     step_header 5 "Initializing DDEV Configuration"
     
-    # Check for existing DDEV database that might cause conflicts
-    print_status "Checking for database conflicts..."
-    if ddev describe "$PROJECT_URL" &>/dev/null; then
-        print_warning "Existing DDEV project detected: $PROJECT_URL"
-        print_substep "Stopping and removing existing project to avoid conflicts..."
+    # CRITICAL: Check for existing DDEV project GLOBALLY (not just in directory)
+    # DDEV stores databases in global Docker volumes that persist even if .ddev/ is deleted
+    print_status "Checking for existing DDEV projects globally..."
+    
+    # Check if project exists in DDEV's global state
+    if ddev list | grep -q "^$PROJECT_URL "; then
+        print_warning "Existing DDEV project found globally: $PROJECT_URL"
         
-        ddev stop "$PROJECT_URL" 2>/dev/null || true
+        # Try to get the database type (needs jq, but may not be installed)
+        if command -v jq &> /dev/null; then
+            local existing_db=$(ddev list --format json | jq -r ".[] | select(.name == \"$PROJECT_URL\") | .db_type + \":\" + .db_version" 2>/dev/null || echo "unknown")
+            if [[ "$existing_db" == mysql* ]]; then
+                print_warning "Found existing MySQL database: $existing_db"
+            else
+                print_substep "Found existing database: $existing_db"
+            fi
+        else
+            print_substep "Existing DDEV project detected (unable to check database type - jq not installed)"
+        fi
+        
+        print_status "This script ONLY uses MariaDB - removing any existing database..."
+        
+        # Delete the existing project completely (including database volumes)
+        print_substep "Deleting existing DDEV project and database volumes..."
         ddev delete -O -y "$PROJECT_URL" 2>/dev/null || true
+        print_success "Existing project and database removed"
         
-        print_success "Old project removed"
+        # Small delay to ensure Docker volumes are fully removed
+        sleep 2
+    else
+        print_substep "No existing DDEV project found globally"
     fi
     
-    # Check if .ddev/config.yaml already exists
+    # Check if .ddev/config.yaml already exists in this directory
     if [ -f ".ddev/config.yaml" ]; then
-        print_substep "DDEV configuration file already exists"
+        print_substep "DDEV configuration file exists in directory"
         
-        # Check if configuration is correct
-        local config_valid=true
-        local config_issues=()
-        local has_mysql=false
+        # Quick validation - must have correct project type and database
+        local config_ok=true
         
-        # Check project name
-        if ! grep -q "name: $PROJECT_URL" .ddev/config.yaml 2>/dev/null; then
-            config_valid=false
-            config_issues+=("project name doesn't match")
-        fi
-        
-        # Check project type
         if ! grep -q "type: drupal10" .ddev/config.yaml 2>/dev/null; then
-            config_valid=false
-            config_issues+=("project type is not drupal10")
+            config_ok=false
+            print_substep "Config has wrong project type"
         fi
         
-        # Check database - ONLY MariaDB is acceptable
-        if grep -q "mysql:" .ddev/config.yaml 2>/dev/null; then
-            config_valid=false
-            config_issues+=("database is MySQL - must use MariaDB")
-            has_mysql=true
-        elif ! grep -q "mariadb:10.11" .ddev/config.yaml 2>/dev/null; then
-            config_valid=false
-            config_issues+=("database is not mariadb:10.11")
+        if ! grep -q "mariadb:10.11" .ddev/config.yaml 2>/dev/null; then
+            config_ok=false
+            print_substep "Config has wrong database type"
         fi
         
-        if [ "$config_valid" = true ]; then
+        if [ "$config_ok" = true ]; then
             print_success "Configuration is valid (drupal10 + mariadb:10.11)"
-            step_complete 5 "DDEV initialization (existing)"
+            step_complete 5 "DDEV initialization (existing valid config)"
             return 0
         else
-            print_warning "Configuration exists but has issues: ${config_issues[*]}"
-            
-            # Special handling for MySQL - MUST delete and recreate with MariaDB
-            if [ "$has_mysql" = true ]; then
-                print_warning "MySQL database detected - this script ONLY uses MariaDB"
-                print_status "Automatically removing MySQL database and recreating with MariaDB..."
-                
-                # Stop DDEV
-                print_substep "Stopping DDEV..."
-                ddev stop 2>/dev/null || true
-                
-                # Delete the MySQL database
-                print_substep "Deleting MySQL database..."
-                ddev delete -O -y 2>/dev/null || true
-                print_success "MySQL database removed"
-                
-                # Continue to reconfiguration with MariaDB below
-            else
-                # No MySQL, just other config issues
-                print_status "Reconfiguring DDEV..."
-                # Stop DDEV before reconfiguring
-                print_substep "Stopping DDEV to reconfigure..."
-                ddev stop 2>/dev/null || true
-            fi
+            print_warning "Config file exists but is incorrect - will recreate"
+            print_substep "Stopping DDEV..."
+            ddev stop 2>/dev/null || true
+            print_substep "Removing incorrect config..."
+            rm -f .ddev/config.yaml
         fi
     fi
     
