@@ -79,6 +79,19 @@ Choose which steps to run interactively.
 GITHUB_TOKEN='ghp_xxxx' ./cinstall mysite
 ```
 
+Useful steps
+
+# Delete all stopped opensocial instances
+for i in {2..28}; do
+  ddev delete opensocial$i --omit-snapshot --yes
+done
+
+# Delete all stopped moodle instances  
+for i in {1..14}; do
+  ddev delete moodle$i --omit-snapshot --yes
+done
+ddev delete moodle --omit-snapshot --yes
+
 ---
 
 ## 📊 Installation Steps
