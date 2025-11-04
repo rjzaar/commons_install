@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.4.0 - NUCLEAR: Remove ALL DDEV volumes system-wide, stop all containers first
 # v2.3.0 - BREAKTHROUGH: Create config.yaml manually to bypass ddev config's database checks
 # v2.2.0 - Fixed: Complete DDEV state cleanup (poweroff + ~/.ddev/ configs + all Docker)
 # v2.1.9 - Fixed: Comprehensive Docker cleanup (containers, volumes, networks) before config
@@ -28,7 +29,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.3.0"
+VERSION="2.4.0"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -944,10 +945,61 @@ step_initialize_ddev() {
         sleep 2
     fi
     
-    print_substep "Removing any docker-compose override files..."
+    print_substep "Removing docker-compose override files..."
     rm -f .ddev/.ddev-docker-compose*.yaml 2>/dev/null || true
     rm -f .ddev/docker-compose*.yaml 2>/dev/null || true
     print_success "Override files cleaned"
+    
+    # NUCLEAR OPTION: Remove ALL ddev-related volumes (not just this project)
+    print_status "Performing nuclear cleanup of ALL DDEV volumes..."
+    print_warning "This will remove ALL DDEV project data on this system"
+    
+    # First: Stop ALL containers to ensure no volumes are in use
+    print_substep "Stopping ALL Docker containers to free volumes..."
+    local all_containers=$(docker ps -q)
+    if [ -n "$all_containers" ]; then
+        docker stop $(docker ps -q) 2>/dev/null || true
+        print_success "All containers stopped"
+    fi
+    
+    local all_ddev_volumes=$(docker volume ls --format "{{.Name}}" | grep "^ddev-" || true)
+    if [ -n "$all_ddev_volumes" ]; then
+        print_substep "Found $(echo "$all_ddev_volumes" | wc -l) DDEV volumes"
+        echo "$all_ddev_volumes" | while read -r volume; do
+            # Only show the first few to avoid spam
+            if [ "$(echo "$all_ddev_volumes" | head -5 | grep "$volume")" ]; then
+                print_substep "Removing: $volume"
+            fi
+            docker volume rm "$volume" 2>/dev/null || true
+        done
+        print_success "ALL DDEV volumes removed (fresh start guaranteed)"
+    else
+        print_substep "No DDEV volumes found"
+    fi
+    
+    # Also check /var/lib/docker/volumes/ for any missed volumes
+    print_substep "Pruning all unused Docker volumes..."
+    docker volume prune -f 2>/dev/null || true
+    
+    print_success "Complete volume cleanup finished"
+    sleep 2
+    
+    # VERIFY: Make absolutely sure no ddev volumes remain
+    print_substep "Verifying cleanup..."
+    local remaining_volumes=$(docker volume ls --format "{{.Name}}" | grep "^ddev-" || true)
+    if [ -n "$remaining_volumes" ]; then
+        print_error "Some DDEV volumes still exist after cleanup!"
+        print_substep "Attempting force removal..."
+        echo "$remaining_volumes" | xargs docker volume rm -f 2>/dev/null || true
+        sleep 1
+        remaining_volumes=$(docker volume ls --format "{{.Name}}" | grep "^ddev-" || true)
+        if [ -n "$remaining_volumes" ]; then
+            print_error "Cannot remove all volumes. They may be in use."
+            print_error "Try: docker system prune -a --volumes -f"
+            exit 1
+        fi
+    fi
+    print_success "Verified: No DDEV volumes exist"
     
     print_status "Creating DDEV configuration manually..."
     print_substep "Bypassing ddev config to avoid database checks"
