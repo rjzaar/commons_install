@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.1.3 - Fixed project type to drupal10, changed database to mariadb:10.11
 # v2.1.2 - Fixed database type mismatch, added explicit mysql:8.0, cleanup old projects
 # v2.1.1 - Fixed find_available_url output capture issue
 # v2.1.0 - Fixed directory handling, added version flag, improved non-interactive mode
@@ -19,7 +20,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.2"
+VERSION="2.1.3"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -829,14 +830,14 @@ step_initialize_ddev() {
     fi
     
     print_status "Configuring DDEV for project: $PROJECT_URL"
-    print_substep "Project type: php"
+    print_substep "Project type: drupal10"
     print_substep "PHP version: 8.2"
-    print_substep "Database: mysql:8.0"
+    print_substep "Database: mariadb:10.11"
     print_substep "Docroot: html"
     print_substep "Project name: $PROJECT_URL"
     
     # Configure with explicit database type to avoid conflicts
-    if ddev config --project-type=php --docroot=html --project-name="$PROJECT_URL" --php-version=8.2 --database=mysql:8.0; then
+    if ddev config --project-type=drupal10 --docroot=html --project-name="$PROJECT_URL" --php-version=8.2 --database=mariadb:10.11; then
         print_success "DDEV configuration created"
         
         print_substep "Verifying DDEV configuration..."
@@ -844,8 +845,13 @@ step_initialize_ddev() {
             print_success ".ddev/config.yaml created successfully"
             
             # Verify database type is set
-            if grep -q "mysql:8.0" .ddev/config.yaml; then
-                print_success "Database type: mysql:8.0"
+            if grep -q "mariadb:10.11" .ddev/config.yaml; then
+                print_success "Database type: mariadb:10.11"
+            fi
+            
+            # Verify project type is set
+            if grep -q "type: drupal10" .ddev/config.yaml; then
+                print_success "Project type: drupal10"
             fi
         else
             print_error "DDEV config file not found"
@@ -897,7 +903,7 @@ step_start_ddev() {
             # Display project info
             echo ""
             echo -e "${CYAN}Project Information:${NC}"
-            ddev describe | grep -E "(Name|Status|Primary URL)" | sed 's/^/  /'
+            ddev describe | grep -E "(Name|Status|Primary URL|Type|Database)" | sed 's/^/  /'
             echo ""
         else
             print_warning "Could not verify container status"
@@ -1049,6 +1055,7 @@ step_install_drupal() {
     print_substep "Profile: social"
     print_substep "Site name: $SITE_NAME"
     print_substep "Admin username: $ADMIN_USER"
+    print_substep "Database: MariaDB 10.11"
     print_substep "This step may take 5-10 minutes..."
     
     if ddev drush site:install social \
@@ -1330,6 +1337,8 @@ step_display_completion() {
     echo "  • Site URL: $site_url"
     echo "  • Admin Username: $ADMIN_USER"
     echo "  • Admin Password: $ADMIN_PASS"
+    echo "  • Database: MariaDB 10.11"
+    echo "  • Project Type: Drupal 10"
     echo ""
     echo -e "${CYAN}Quick Access:${NC}"
     echo "  • One-time login link:"
@@ -1342,6 +1351,7 @@ step_display_completion() {
     echo "  • Admin login: ddev drush user:login"
     echo "  • Clear cache: ddev drush cache:rebuild"
     echo "  • View logs: ddev logs"
+    echo "  • Run drush: ddev drush [command]"
     echo "  • Resume/update: cd $OPENSOCIAL_DIR && $0"
     echo ""
     echo -e "${CYAN}Project Location:${NC}"
@@ -1399,6 +1409,11 @@ Examples:
     $0 -r myproject        # Resume existing installation
     $0 -c myproject        # Force clean install (remove existing)
     $0 -t ghp_xxxx mysite  # Install with GitHub token
+
+Configuration:
+    Project Type: Drupal 10 (enables drush commands)
+    Database: MariaDB 10.11
+    PHP Version: 8.2
 
 Directory Structure:
     The script creates:
@@ -1462,6 +1477,7 @@ main() {
     echo -e "${MAGENTA}OpenSocial (Drupal) Installation Script${NC}"
     echo -e "${CYAN}Automated DDEV-based installation with smart resume${NC}"
     echo -e "${BLUE}Version: $VERSION${NC}"
+    echo -e "${CYAN}Database: MariaDB 10.11 | Project Type: Drupal 10${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
