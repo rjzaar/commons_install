@@ -3,7 +3,7 @@
 ################################################################################
 # OpenSocial (Drupal) Installation Script with DDEV on Ubuntu
 # 
-# Version: 2.1.0
+# Version: 2.1.1
 # Date: November 2025
 # 
 # This script automates the complete installation of OpenSocial using DDEV,
@@ -785,6 +785,9 @@ step_initialize_ddev() {
     fi
     
     step_header 5 "Initializing DDEV Configuration"
+    # Database mismatch detection added by patch script
+    # Database mismatch detection added by patch script
+    # Database mismatch detection added by patch script
     
     # Check if .ddev/config.yaml already exists
     if [ -f ".ddev/config.yaml" ]; then
