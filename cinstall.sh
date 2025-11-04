@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.6.0 - FOUND IT: Remove non-DDEV volumes (docker-compose) matching project name
 # v2.5.0 - DIAGNOSTICS: Show all volumes before/after, check for mysql references everywhere
 # v2.4.0 - NUCLEAR: Remove ALL DDEV volumes system-wide, stop all containers first
 # v2.3.0 - BREAKTHROUGH: Create config.yaml manually to bypass ddev config's database checks
@@ -30,7 +31,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.5.0"
+VERSION="2.6.0"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -963,7 +964,36 @@ step_initialize_ddev() {
         print_success "All containers stopped"
     fi
     
+    # Remove DDEV volumes
     local all_ddev_volumes=$(docker volume ls --format "{{.Name}}" | grep "^ddev-" || true)
+    if [ -n "$all_ddev_volumes" ]; then
+        print_substep "Found $(echo "$all_ddev_volumes" | wc -l) DDEV volumes"
+        echo "$all_ddev_volumes" | while read -r volume; do
+            # Only show the first few to avoid spam
+            if [ "$(echo "$all_ddev_volumes" | head -5 | grep "$volume")" ]; then
+                print_substep "Removing: $volume"
+            fi
+            docker volume rm "$volume" 2>/dev/null || true
+        done
+        print_success "ALL DDEV volumes removed"
+    else
+        print_substep "No DDEV volumes found"
+    fi
+    
+    # CRITICAL: Also remove non-DDEV volumes that match our project name
+    # These are from docker-compose or other tools, and DDEV detects them!
+    print_status "Removing non-DDEV volumes matching project name..."
+    local project_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^${PROJECT_URL}" || true)
+    if [ -n "$project_volumes" ]; then
+        print_warning "Found non-DDEV volumes for project: $PROJECT_URL"
+        echo "$project_volumes" | while read -r volume; do
+            print_substep "Removing: $volume"
+            docker volume rm "$volume" 2>/dev/null || true
+        done
+        print_success "Non-DDEV project volumes removed"
+    else
+        print_substep "No non-DDEV project volumes found"
+    fi
     if [ -n "$all_ddev_volumes" ]; then
         print_substep "Found $(echo "$all_ddev_volumes" | wc -l) DDEV volumes"
         echo "$all_ddev_volumes" | while read -r volume; do
