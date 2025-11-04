@@ -1385,7 +1385,7 @@ SETTINGSEOF"
         print_success "settings.ddev.php created with private file path"
     else
         # Check if private path is already configured (check for complete line with assignment)
-        if ! ddev exec grep -q "\$settings\['file_private_path'\] =  '../private';"  /var/www/html/sites/default/settings.ddev.php" 2>/dev/null; then
+        if ! ddev exec grep -q "\$settings\['file_private_path'\] =  '../private';"  "/var/www/html/sites/default/settings.ddev.php" 2>/dev/null; then
             print_substep "Adding private file path to existing settings.ddev.php..."
             ddev exec "cat >> /var/www/html/sites/default/settings.ddev.php << 'SETTINGSEOF'
 
