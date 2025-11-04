@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.1.8 - Fixed: Check and remove orphaned Docker volumes (MySQL persisting outside DDEV)
 # v2.1.7 - Fixed: Check for DDEV projects globally before configuring (fixes MySQL persistence)
 # v2.1.6 - MARIADB ONLY: Removed all MySQL options, auto-deletes MySQL if detected
 # v2.1.5 - Added detection of existing database type, prevents forced migration errors
@@ -24,7 +25,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.7"
+VERSION="2.1.8"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -824,6 +825,27 @@ step_initialize_ddev() {
         sleep 2
     else
         print_substep "No existing DDEV project found globally"
+    fi
+    
+    # ADDITIONAL CHECK: Look for orphaned Docker volumes
+    # Sometimes volumes exist even when DDEV doesn't track the project
+    print_status "Checking for orphaned Docker volumes..."
+    
+    local orphaned_volumes=$(docker volume ls --format "{{.Name}}" | grep "ddev-${PROJECT_URL}" || true)
+    
+    if [ -n "$orphaned_volumes" ]; then
+        print_warning "Found orphaned Docker volumes for project: $PROJECT_URL"
+        print_substep "These volumes exist but aren't tracked by DDEV"
+        
+        echo "$orphaned_volumes" | while read -r volume; do
+            print_substep "Removing volume: $volume"
+            docker volume rm "$volume" 2>/dev/null || true
+        done
+        
+        print_success "Orphaned volumes removed"
+        sleep 2
+    else
+        print_substep "No orphaned Docker volumes found"
     fi
     
     # Check if .ddev/config.yaml already exists in this directory
