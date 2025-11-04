@@ -3,13 +3,14 @@
 ################################################################################
 # OpenSocial (Drupal) Installation Script with DDEV on Ubuntu
 # 
-# Version: 2.1.1
 # Date: November 2025
 # 
 # This script automates the complete installation of OpenSocial using DDEV,
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.1.2 - Fixed database type mismatch, added explicit mysql:8.0, cleanup old projects
+# v2.1.1 - Fixed find_available_url output capture issue
 # v2.1.0 - Fixed directory handling, added version flag, improved non-interactive mode
 # v2.0.0 - Added checkpoint system, smart resume, module updates
 # v1.0.0 - Initial release with basic installation automation
@@ -18,7 +19,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.0"
+VERSION="2.1.2"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -506,17 +507,18 @@ find_available_url() {
     local url_candidate="${base_name}"
     local counter=1
     
-    print_status "Checking URL availability..."
+    print_status "Checking URL availability..." >&2
     
     while ddev describe "${url_candidate}" &>/dev/null; do
-        print_substep "URL '${url_candidate}' is already in use"
+        print_substep "URL '${url_candidate}' is already in use" >&2
         url_candidate="${base_name}${counter}"
         counter=$((counter + 1))
     done
     
-    print_success "Available URL found: ${url_candidate}"
+    print_success "Available URL found: ${url_candidate}" >&2
     echo "${url_candidate}"
 }
+
 
 ################################################################################
 # Installation Steps
@@ -785,13 +787,22 @@ step_initialize_ddev() {
     fi
     
     step_header 5 "Initializing DDEV Configuration"
-    # Database mismatch detection added by patch script
-    # Database mismatch detection added by patch script
-    # Database mismatch detection added by patch script
+    
+    # Check for existing DDEV database that might cause conflicts
+    print_status "Checking for database conflicts..."
+    if ddev describe "$PROJECT_URL" &>/dev/null; then
+        print_warning "Existing DDEV project detected: $PROJECT_URL"
+        print_substep "Stopping and removing existing project to avoid conflicts..."
+        
+        ddev stop "$PROJECT_URL" 2>/dev/null || true
+        ddev delete -O -y "$PROJECT_URL" 2>/dev/null || true
+        
+        print_success "Old project removed"
+    fi
     
     # Check if .ddev/config.yaml already exists
     if [ -f ".ddev/config.yaml" ]; then
-        print_substep "DDEV configuration already exists"
+        print_substep "DDEV configuration file already exists"
         
         # Verify it's correct
         if grep -q "name: $PROJECT_URL" .ddev/config.yaml 2>/dev/null; then
@@ -819,21 +830,31 @@ step_initialize_ddev() {
     
     print_status "Configuring DDEV for project: $PROJECT_URL"
     print_substep "Project type: php"
+    print_substep "PHP version: 8.2"
+    print_substep "Database: mysql:8.0"
     print_substep "Docroot: html"
     print_substep "Project name: $PROJECT_URL"
     
-    if ddev config --project-type=php --docroot=html --project-name="$PROJECT_URL" --php-version=8.2; then
+    # Configure with explicit database type to avoid conflicts
+    if ddev config --project-type=php --docroot=html --project-name="$PROJECT_URL" --php-version=8.2 --database=mysql:8.0; then
         print_success "DDEV configuration created"
         
         print_substep "Verifying DDEV configuration..."
         if [ -f ".ddev/config.yaml" ]; then
             print_success ".ddev/config.yaml created successfully"
+            
+            # Verify database type is set
+            if grep -q "mysql:8.0" .ddev/config.yaml; then
+                print_success "Database type: mysql:8.0"
+            fi
         else
             print_error "DDEV config file not found"
             exit 1
         fi
     else
         print_error "DDEV configuration failed"
+        print_substep "If you see database mismatch errors, old project data may exist"
+        print_substep "Try running: ddev delete -O -y $PROJECT_URL"
         exit 1
     fi
     
