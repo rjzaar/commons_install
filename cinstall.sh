@@ -9,7 +9,8 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
-# v2.1.5 - Fixed Step 5 to verify project type and database, not just project name
+# v2.1.5 - Added detection of existing database type, prevents forced migration errors
+# v2.1.4 - Fixed Step 5 to verify project type and database, not just project name
 # v2.1.3 - Fixed project type to drupal10, changed database to mariadb:10.11
 # v2.1.2 - Fixed database type mismatch, added explicit mysql:8.0, cleanup old projects
 # v2.1.1 - Fixed find_available_url output capture issue
@@ -809,6 +810,8 @@ step_initialize_ddev() {
         # Check if configuration is correct
         local config_valid=true
         local config_issues=()
+        local needs_db_migration=false
+        local current_db_type=""
         
         # Check project name
         if ! grep -q "name: $PROJECT_URL" .ddev/config.yaml 2>/dev/null; then
@@ -822,10 +825,19 @@ step_initialize_ddev() {
             config_issues+=("project type is not drupal10")
         fi
         
-        # Check database version
-        if ! grep -q "mariadb:10.11" .ddev/config.yaml 2>/dev/null; then
-            config_valid=false
-            config_issues+=("database is not mariadb:10.11")
+        # Check database version - detect what's currently configured
+        if grep -q "mysql:" .ddev/config.yaml 2>/dev/null; then
+            current_db_type="mysql"
+            if ! grep -q "mariadb:10.11" .ddev/config.yaml 2>/dev/null; then
+                config_valid=false
+                config_issues+=("database is MySQL, prefer MariaDB")
+                needs_db_migration=true
+            fi
+        elif grep -q "mariadb:" .ddev/config.yaml 2>/dev/null; then
+            current_db_type="mariadb"
+            if ! grep -q "mariadb:10.11" .ddev/config.yaml 2>/dev/null; then
+                print_substep "MariaDB detected but different version"
+            fi
         fi
         
         if [ "$config_valid" = true ]; then
@@ -835,24 +847,105 @@ step_initialize_ddev() {
         else
             print_warning "Configuration exists but has issues: ${config_issues[*]}"
             
-            # In non-interactive mode, always reconfigure if config is wrong
-            if [ "$INTERACTIVE_MODE" != true ]; then
-                print_status "Auto-reconfiguring DDEV (non-interactive mode)"
-                # Stop DDEV before reconfiguring
-                print_substep "Stopping DDEV to reconfigure..."
-                ddev stop 2>/dev/null || true
-                # Continue to reconfiguration below
-            else
-                read -p "Reconfigure DDEV? (Y/n): " -n 1 -r
+            # Special handling for database type change
+            if [ "$needs_db_migration" = true ]; then
+                print_warning "Database type change detected: $current_db_type → mariadb"
+                print_substep "DDEV won't allow changing database type on existing project"
                 echo ""
-                if [[ $REPLY =~ ^[Nn]$ ]]; then
-                    print_warning "Keeping existing configuration - may cause issues!"
-                    step_complete 5 "DDEV initialization (kept existing)"
+                
+                # In non-interactive mode, provide guidance but don't auto-delete database
+                if [ "$INTERACTIVE_MODE" != true ]; then
+                    print_warning "Non-interactive mode: Keeping existing $current_db_type database"
+                    print_substep "To use MariaDB, manually run: ddev delete -O -y && ddev config --database=mariadb:10.11"
+                    # Reconfigure with current database type to fix other issues
+                    print_status "Reconfiguring with current database type: $current_db_type"
+                    ddev stop 2>/dev/null || true
+                    
+                    if [ "$current_db_type" = "mysql" ]; then
+                        # Keep MySQL, just fix project type
+                        if ddev config --project-type=drupal10 --docroot=html --project-name="$PROJECT_URL" --php-version=8.2 --database=mysql:8.0; then
+                            print_success "Reconfigured with drupal10 + mysql:8.0"
+                        fi
+                    fi
+                    step_complete 5 "DDEV initialization (kept existing database)"
                     return 0
+                else
+                    # Interactive mode - offer options
+                    echo -e "${YELLOW}Options:${NC}"
+                    echo "  1) Keep $current_db_type (faster, no data loss)"
+                    echo "  2) Delete database & switch to MariaDB (loses any existing data)"
+                    echo "  3) Cancel and handle manually"
+                    echo ""
+                    read -p "Choose option (1-3): " -n 1 -r
+                    echo ""
+                    
+                    case $REPLY in
+                        1)
+                            print_status "Keeping $current_db_type database"
+                            ddev stop 2>/dev/null || true
+                            
+                            if [ "$current_db_type" = "mysql" ]; then
+                                if ddev config --project-type=drupal10 --docroot=html --project-name="$PROJECT_URL" --php-version=8.2 --database=mysql:8.0; then
+                                    print_success "Reconfigured with drupal10 + mysql:8.0"
+                                fi
+                            fi
+                            step_complete 5 "DDEV initialization (kept existing database)"
+                            return 0
+                            ;;
+                        2)
+                            print_warning "This will DELETE the existing database"
+                            read -p "Are you sure? (y/N): " -n 1 -r
+                            echo ""
+                            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                                print_status "Deleting existing database..."
+                                ddev stop 2>/dev/null || true
+                                ddev delete -O -y 2>/dev/null || true
+                                print_success "Database deleted"
+                                # Continue to reconfiguration with MariaDB below
+                            else
+                                print_error "Operation cancelled"
+                                exit 1
+                            fi
+                            ;;
+                        3)
+                            print_error "Operation cancelled"
+                            echo ""
+                            echo "To manually fix:"
+                            echo "  Option A - Keep MySQL:"
+                            echo "    ddev config --project-type=drupal10 --database=mysql:8.0"
+                            echo ""
+                            echo "  Option B - Switch to MariaDB:"
+                            echo "    ddev delete -O -y"
+                            echo "    ddev config --project-type=drupal10 --database=mariadb:10.11"
+                            exit 1
+                            ;;
+                        *)
+                            print_error "Invalid option"
+                            exit 1
+                            ;;
+                    esac
                 fi
-                # Stop DDEV before reconfiguring
-                print_substep "Stopping DDEV to reconfigure..."
-                ddev stop 2>/dev/null || true
+            else
+                # No database migration needed, just other config issues
+                # In non-interactive mode, always reconfigure if config is wrong
+                if [ "$INTERACTIVE_MODE" != true ]; then
+                    print_status "Auto-reconfiguring DDEV (non-interactive mode)"
+                    # Stop DDEV before reconfiguring
+                    print_substep "Stopping DDEV to reconfigure..."
+                    ddev stop 2>/dev/null || true
+                    # Continue to reconfiguration below
+                else
+                    read -p "Reconfigure DDEV? (Y/n): " -n 1 -r
+                    echo ""
+                    if [[ $REPLY =~ ^[Nn]$ ]]; then
+                        print_warning "Keeping existing configuration - may cause issues!"
+                        step_complete 5 "DDEV initialization (kept existing)"
+                        return 0
+                    fi
+                    # Stop DDEV before reconfiguring
+                    print_substep "Stopping DDEV to reconfigure..."
+                    ddev stop 2>/dev/null || true
+                fi
             fi
         fi
     fi
