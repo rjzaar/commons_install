@@ -2,11 +2,14 @@
 
 ################################################################################
 # OpenSocial (Drupal) Installation Script with DDEV on Ubuntu
-# This script automates the installation of OpenSocial using DDEV
-# MODIFICATIONS:
-# - OpenSocial stored within script directory
-# - Automatic URL conflict detection and resolution
-# - Added workflow_assignment module configuration
+# 
+# This script automates the complete installation of OpenSocial using DDEV,
+# including configuration, sample content, and GitHub token support.
+#
+# Recent updates:
+# - Removed ultimate_cron workaround code (patch now handles this)
+# - Enhanced step clarity with detailed progress messages
+# - Improved status reporting throughout installation
 ################################################################################
 
 set -e  # Exit on any error
@@ -16,60 +19,90 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
-# Function to wrap steps with clear headers
+# Progress tracking
+TOTAL_STEPS=14
+CURRENT_STEP=0
+
+# Configuration variables
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"  # Set via environment or leave empty
+SITE_NAME="My OpenSocial Site"
+SITE_EMAIL="admin@example.com"
+ADMIN_USER="admin"
+ADMIN_PASS="admin"
+ADMIN_EMAIL="admin@example.com"
+SITE_TIMEZONE="America/New_York"
+
+################################################################################
+# Output Functions - Enhanced for better clarity
+################################################################################
+
 step_header() {
     local step_num=$1
     local step_name=$2
+    CURRENT_STEP=$step_num
+    local progress=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    
     echo ""
-    echo "============================================"
-    echo "STEP $step_num: $step_name"
-    echo "============================================"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${MAGENTA}STEP $step_num of $TOTAL_STEPS${NC} (${progress}% complete)"
+    echo -e "${CYAN}▶ $step_name${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 step_complete() {
     local step_num=$1
     local step_name=$2
     echo ""
-    print_status "✓ STEP $step_num COMPLETE: $step_name"
-    echo "============================================"
+    echo -e "${GREEN}✓ STEP $step_num COMPLETED:${NC} $step_name"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
-# Function to print colored output
 print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    echo -e "${GREEN}  ▸${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}  ✗ ERROR:${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}  ⚠ WARNING:${NC} $1"
 }
 
 print_skip() {
-    echo -e "${BLUE}[SKIP]${NC} $1"
+    echo -e "${BLUE}  ⊳ SKIPPED:${NC} $1"
 }
 
-# Interactive mode flag
+print_substep() {
+    echo -e "${CYAN}    →${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}    ✓${NC} $1"
+}
+
+################################################################################
+# Interactive Mode Functions
+################################################################################
+
 INTERACTIVE_MODE=false
 SKIP_STEPS=()
 
-# Function to check if a step should be skipped
 should_skip_step() {
     local step_num=$1
     for skip in "${SKIP_STEPS[@]}"; do
         if [ "$skip" == "$step_num" ]; then
-            return 0  # Should skip
+            return 0
         fi
     done
-    return 1  # Should not skip
+    return 1
 }
 
-# Function to ask user if they want to run a step
 ask_step() {
     local step_num=$1
     local step_name=$2
@@ -77,1542 +110,710 @@ ask_step() {
     if [ "$INTERACTIVE_MODE" = true ]; then
         echo ""
         echo -e "${BLUE}Step $step_num: $step_name${NC}"
-        read -p "Do you want to run this step? (Y/n) " -n 1 -r
+        read -p "Run this step? (Y/n): " -n 1 -r
         echo
-        if [[ $REPLY =~ ^[Nn]$ ]]; then
+        if [[ ! $REPLY =~ ^[Yy]$ ]] && [[ ! -z $REPLY ]]; then
             SKIP_STEPS+=("$step_num")
-            return 1  # Skip
-        fi
-    fi
-    return 0  # Run
-}
-
-# Function to check if a DDEV URL is already in use
-is_url_in_use() {
-    local project_name=$1
-    local url="${project_name}.ddev.site"
-    
-    # Check if URL is already in use by another DDEV project
-    ddev list 2>/dev/null | grep -q "$url" && return 0 || return 1
-}
-
-# Function to find an available project name
-find_available_project_name() {
-    local base_name=$1
-    local counter=2
-    local test_name="$base_name"
-    
-    # Check if base name is available
-    if ! is_url_in_use "$test_name"; then
-        echo "$test_name"
-        return 0
-    fi
-    
-    # Try numbered variants
-    while is_url_in_use "${base_name}${counter}"; do
-        counter=$((counter + 1))
-        if [ $counter -gt 100 ]; then
-            print_error "Could not find available URL after 100 attempts"
-            exit 1
-        fi
-    done
-    
-    test_name="${base_name}${counter}"
-    echo "$test_name"
-}
-
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -i|--interactive)
-            INTERACTIVE_MODE=true
-            shift
-            ;;
-        -h|--help)
-            echo "Usage: $0 [OPTIONS] [PROJECT_NAME] [OPENSOCIAL_VERSION]"
-            echo ""
-            echo "Options:"
-            echo "  -i, --interactive    Run in interactive mode (choose which steps to run)"
-            echo "  -h, --help          Show this help message"
-            echo ""
-            echo "Examples:"
-            echo "  $0                                    # Run all steps automatically (dev-master)"
-            echo "  $0 -i                                 # Run in interactive mode"
-            echo "  $0 my-site                            # Custom project name (dev-master)"
-            echo "  $0 my-site 12.4.13                    # Custom project name and specific version"
-            echo "  $0 my-site 13.0.0-beta1               # Install beta version"
-            echo "  $0 -i my-site                         # Interactive with custom name"
-            echo ""
-            echo "MODIFICATIONS:"
-            echo "  - Project will be created in script directory"
-            echo "  - URL conflicts are automatically detected and resolved"
-            echo "  - Includes workflow_assignment module configuration"
-            exit 0
-            ;;
-        *)
-            break
-            ;;
-    esac
-done
-
-# Check if running on Ubuntu
-if [ ! -f /etc/os-release ]; then
-    print_error "Cannot determine OS. This script is designed for Ubuntu."
-    exit 1
-fi
-
-source /etc/os-release
-if [[ ! "$ID" == "ubuntu" ]]; then
-    print_warning "This script is designed for Ubuntu. Your OS: $ID"
-    read -p "Do you want to continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
-# Get script directory - this is where we'll store the project
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-print_status "Script directory: $SCRIPT_DIR"
-
-# Configuration variables
-BASE_PROJECT_NAME="${1:-opensocial}"
-OPENSOCIAL_VERSION="${2:-dev-master}"  # Use dev-master for latest, or specific version like 12.4.13
-
-# Check for URL conflicts and find available name
-print_status "Checking for URL conflicts..."
-PROJECT_NAME=$(find_available_project_name "$BASE_PROJECT_NAME")
-
-if [ "$PROJECT_NAME" != "$BASE_PROJECT_NAME" ]; then
-    print_warning "URL '$BASE_PROJECT_NAME.ddev.site' is already in use by another DDEV project"
-    print_status "Using alternative name: $PROJECT_NAME"
-    print_status "Project URL will be: https://$PROJECT_NAME.ddev.site"
-    echo ""
-    read -p "Continue with this name? (Y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        read -p "Enter a different project name: " CUSTOM_NAME
-        if [ -n "$CUSTOM_NAME" ]; then
-            PROJECT_NAME=$(find_available_project_name "$CUSTOM_NAME")
-            if [ "$PROJECT_NAME" != "$CUSTOM_NAME" ]; then
-                print_warning "That name is also in use. Using: $PROJECT_NAME"
-            fi
-        else
-            print_error "No name provided. Exiting."
-            exit 1
-        fi
-    fi
-fi
-
-PHP_VERSION="8.2"
-MYSQL_VERSION="8.0"
-NODEJS_VERSION="18"
-
-# Site configuration defaults
-SITE_NAME="OpenSocial Community"
-SITE_MAIL="admin@example.com"
-ADMIN_USER="admin"
-ADMIN_PASS="admin"
-ADMIN_MAIL="admin@example.com"
-DEFAULT_COUNTRY="US"
-SITE_TIMEZONE="America/New_York"
-
-print_status "Starting OpenSocial installation with DDEV"
-print_status "Installation location: $SCRIPT_DIR/$PROJECT_NAME"
-print_status "Project name: $PROJECT_NAME"
-print_status "Project URL: https://$PROJECT_NAME.ddev.site"
-print_status "OpenSocial version: $OPENSOCIAL_VERSION"
-print_status "Note: Use 'dev-master' for latest, or specific versions like '12.4.13', '13.0.0-beta1'"
-echo ""
-echo "╔════════════════════════════════════════════╗"
-echo "║   OpenSocial DDEV Installation Script     ║"
-echo "║                                            ║"
-echo "║   Steps to be executed:                    ║"
-echo "║   [1] System Prerequisites                 ║"
-echo "║   [2] DDEV & Docker                        ║"
-echo "║   [3] mkcert (HTTPS)                       ║"
-echo "║   [4] Project Directory                    ║"
-echo "║   [5] DDEV Configuration                   ║"
-echo "║   [6] Start DDEV                           ║"
-echo "║   [7] Install via Composer                 ║"
-echo "║   [8] Install Drupal/OpenSocial            ║"
-echo "║   [9] Configure Site Settings              ║"
-echo "║   [10] Enable Modules                      ║"
-echo "║   [11] User & Content Settings             ║"
-echo "║   [12] Cache & Permissions                 ║"
-echo "║   [13] Development Settings                ║"
-echo "║   [14] Enable Workflow Assignment          ║"
-echo "║   [15] Configure Workflow                  ║"
-echo "║   [16] Create Test Content                 ║"
-echo "║   [17] Summary & Completion                ║"
-echo "╚════════════════════════════════════════════╝"
-echo ""
-
-# Step 1: Install prerequisites
-if ! should_skip_step 1 && ask_step 1 "Install system prerequisites"; then
-    echo ""
-    echo "============================================"
-    echo "STEP 1: Install System Prerequisites"
-    echo "============================================"
-    print_status "Checking system prerequisites..."
-    
-    # Check if packages are already installed
-    PACKAGES_TO_INSTALL=()
-    PACKAGES="ca-certificates curl gnupg lsb-release libnss3-tools apt-transport-https software-properties-common"
-    
-    for pkg in $PACKAGES; do
-        if ! dpkg -l | grep -q "^ii  $pkg"; then
-            PACKAGES_TO_INSTALL+=("$pkg")
-        fi
-    done
-    
-    if [ ${#PACKAGES_TO_INSTALL[@]} -eq 0 ]; then
-        print_skip "All system prerequisites are already installed"
-    else
-        print_status "Installing missing packages: ${PACKAGES_TO_INSTALL[*]}"
-        sudo apt-get update
-        sudo apt-get install -y "${PACKAGES_TO_INSTALL[@]}"
-        print_status "System prerequisites installed successfully"
-    fi
-    
-    echo ""
-    print_status "✓ STEP 1 COMPLETE: System prerequisites ready"
-    echo "============================================"
-    echo ""
-else
-    print_skip "Skipping system prerequisites installation"
-fi
-
-# Step 2: Install DDEV and Docker if not already installed
-if ! should_skip_step 2 && ask_step 2 "Install DDEV and Docker"; then
-    echo ""
-    echo "============================================"
-    echo "STEP 2: Install DDEV and Docker"
-    echo "============================================"
-    print_status "Checking for DDEV installation..."
-
-    if ! command -v ddev &> /dev/null; then
-        print_status "DDEV not found. Installing DDEV..."
-        
-        # Install Docker if not present
-        if ! command -v docker &> /dev/null; then
-            print_status "Installing Docker..."
-            
-            # Add Docker's official GPG key
-            sudo mkdir -p /etc/apt/keyrings
-            if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
-                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-            fi
-            
-            # Set up Docker repository
-            echo \
-              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-              $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-            
-            # Install Docker Engine
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-            
-            # Add current user to docker group
-            sudo usermod -aG docker $USER
-            print_status "✓ Docker installed successfully: $(docker --version)"
-            
-            # Activate docker group for current session
-            print_warning "Added $USER to docker group."
-            print_warning "Attempting to activate docker group for this session..."
-            
-            # Try to activate the group in the current session
-            if command -v newgrp &> /dev/null; then
-                print_status "You may need to run: newgrp docker"
-            fi
-            
-            echo ""
-            print_error "============================================"
-            print_error "IMPORTANT: Docker Group Change"
-            print_error "============================================"
-            print_error "Docker has been installed and your user added to the docker group."
-            print_error "However, you need to activate this change by doing ONE of:"
-            print_error ""
-            print_error "Option 1 (Recommended): Log out and log back in"
-            print_error "Option 2: Run this command, then re-run this script:"
-            print_error "          newgrp docker"
-            print_error "Option 3: Reboot your system"
-            print_error ""
-            print_error "After doing one of the above, re-run this installation script."
-            print_error "============================================"
-            exit 0
-        else
-            print_skip "Docker is already installed: $(docker --version)"
-        fi
-        
-        # Install DDEV
-        print_status "Installing DDEV..."
-        curl -fsSL https://ddev.com/install.sh | bash
-        print_status "✓ DDEV installed successfully: $(ddev version | head -n 1)"
-    else
-        print_skip "DDEV is already installed: $(ddev version | head -n 1)"
-    fi
-    
-    # Check if user can access Docker (test for permission issue)
-    print_status "Verifying Docker permissions..."
-    if ! docker ps >/dev/null 2>&1; then
-        print_error "============================================"
-        print_error "Docker Permission Error Detected"
-        print_error "============================================"
-        print_error "You don't have permission to access Docker."
-        print_error ""
-        print_error "Current user: $USER"
-        print_error "Docker group membership:"
-        groups | grep docker || echo "  NOT in docker group"
-        print_error ""
-        print_error "FIX THIS ISSUE:"
-        print_error ""
-        print_error "1. Add yourself to the docker group:"
-        print_error "   sudo usermod -aG docker $USER"
-        print_error ""
-        print_error "2. Activate the change (choose ONE):"
-        print_error "   Option A: Log out and log back in (RECOMMENDED)"
-        print_error "   Option B: Run: newgrp docker"
-        print_error "             Then re-run this script"
-        print_error "   Option C: Reboot your system"
-        print_error ""
-        print_error "3. Verify it works:"
-        print_error "   docker ps"
-        print_error ""
-        print_error "4. Re-run this installation script"
-        print_error "============================================"
-        exit 1
-    else
-        print_status "✓ Docker permissions are correct"
-        print_status "✓ Successfully connected to Docker daemon"
-    fi
-    
-    echo ""
-    print_status "✓ STEP 2 COMPLETE: DDEV and Docker ready"
-    echo "============================================"
-    echo ""
-else
-    print_skip "Skipping DDEV and Docker installation"
-fi
-
-# Step 3: Install and configure mkcert for HTTPS
-if ! should_skip_step 3 && ask_step 3 "Install and configure mkcert for HTTPS"; then
-    print_status "Setting up mkcert for local HTTPS..."
-
-    if ! command -v mkcert &> /dev/null; then
-        print_status "Installing mkcert..."
-        
-        # Install mkcert using the official installation method
-        curl -fsSL https://github.com/FiloSottile/mkcert/releases/download/v1.4.4/mkcert-v1.4.4-linux-amd64 -o mkcert
-        chmod +x mkcert
-        sudo mv mkcert /usr/local/bin/
-        
-        print_status "mkcert installed successfully"
-    else
-        print_skip "mkcert is already installed: $(mkcert -version)"
-    fi
-
-    # Check if CA is already installed
-    if [ ! -d "$(mkcert -CAROOT)" ] || [ ! -f "$(mkcert -CAROOT)/rootCA.pem" ]; then
-        print_status "Installing local CA certificates..."
-        mkcert -install
-        print_status "Local CA certificates installed at $(mkcert -CAROOT)"
-    else
-        print_skip "Local CA certificates already installed at $(mkcert -CAROOT)"
-    fi
-
-    # DDEV will automatically detect and use mkcert if it's installed
-    print_status "DDEV will automatically use mkcert for HTTPS certificates"
-else
-    print_skip "Skipping mkcert installation and configuration"
-fi
-
-# Step 4: Create project directory in script directory
-if ! should_skip_step 4 && ask_step 4 "Create project directory"; then
-    PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
-    
-    if [ -d "$PROJECT_PATH" ]; then
-        print_warning "Project directory '$PROJECT_PATH' already exists"
-        
-        # Check if it's a DDEV project
-        if [ -f "$PROJECT_PATH/.ddev/config.yaml" ]; then
-            # Check if the config file is corrupted
-            if ! ddev describe >/dev/null 2>&1 && grep -q "already defined" "$PROJECT_PATH/.ddev/config.yaml" 2>/dev/null; then
-                print_error "Detected corrupted DDEV configuration (duplicate keys in config.yaml)"
-                echo "Options:"
-                echo "  1) Fix configuration (remove duplicate keys)"
-                echo "  2) Delete .ddev directory and reconfigure"
-                echo "  3) Delete entire project and start fresh"
-                echo "  4) Exit"
-                read -p "Choose an option (1-4): " -n 1 -r
-                echo
-                
-                case $REPLY in
-                    1)
-                        print_status "Attempting to fix configuration..."
-                        cd "$PROJECT_PATH"
-                        # Backup the corrupted config
-                        cp .ddev/config.yaml .ddev/config.yaml.backup
-                        # Remove lines after the first occurrence of duplicate keys
-                        # This is a simple fix - removes everything after line 300
-                        head -n 50 .ddev/config.yaml > .ddev/config.yaml.tmp
-                        mv .ddev/config.yaml.tmp .ddev/config.yaml
-                        print_status "Configuration fixed. Backup saved as config.yaml.backup"
-                        ;;
-                    2)
-                        print_status "Removing .ddev directory..."
-                        cd "$PROJECT_PATH"
-                        rm -rf .ddev
-                        print_status ".ddev directory removed. Will reconfigure."
-                        ;;
-                    3)
-                        print_warning "This will DELETE all data in $PROJECT_PATH"
-                        read -p "Are you absolutely sure? Type 'yes' to confirm: " confirmation
-                        if [ "$confirmation" == "yes" ]; then
-                            print_status "Deleting directory..."
-                            rm -rf "$PROJECT_PATH"
-                            print_status "Creating fresh project directory..."
-                            mkdir -p "$PROJECT_PATH"
-                            cd "$PROJECT_PATH"
-                        else
-                            print_error "Deletion cancelled. Exiting."
-                            exit 1
-                        fi
-                        ;;
-                    4)
-                        print_status "Exiting..."
-                        exit 0
-                        ;;
-                    *)
-                        print_error "Invalid option. Exiting."
-                        exit 1
-                        ;;
-                esac
-            else
-                print_status "This appears to be an existing DDEV project"
-                
-                # Detect which step failed or needs to be redone
-                cd "$PROJECT_PATH"
-                LAST_FAILED_STEP=""
-                LAST_FAILED_STEP_NAME=""
-                
-                # Check various installation states
-                if [ ! -f "composer.json" ]; then
-                    LAST_FAILED_STEP="7"
-                    LAST_FAILED_STEP_NAME="Install OpenSocial via Composer"
-                elif ! ddev drush version >/dev/null 2>&1; then
-                    LAST_FAILED_STEP="7"
-                    LAST_FAILED_STEP_NAME="Install Drush"
-                elif ! ddev drush status --fields=bootstrap 2>/dev/null | grep -q "Successful"; then
-                    LAST_FAILED_STEP="8"
-                    LAST_FAILED_STEP_NAME="Install Drupal/OpenSocial database"
-                elif [ -f "html/sites/default/settings.php" ] && ! grep -q "\$settings\['file_private_path'\] =  '../private';" html/sites/default/settings.php; then
-                    LAST_FAILED_STEP="8"
-                    LAST_FAILED_STEP_NAME="Configure private file path"
-                elif ! ddev drush pml --status=enabled 2>/dev/null | grep -q "social_user"; then
-                    LAST_FAILED_STEP="10"
-                    LAST_FAILED_STEP_NAME="Enable recommended modules"
-                fi
-                
-                cd "$SCRIPT_DIR"
-                
-                echo "Options:"
-                if [ -n "$LAST_FAILED_STEP" ]; then
-                    echo "  1) Resume from last failed/incomplete step: Step $LAST_FAILED_STEP ($LAST_FAILED_STEP_NAME)"
-                else
-                    echo "  1) Continue with existing project (resume installation)"
-                fi
-                echo "  2) Delete and start fresh"
-                echo "  3) Choose a different project name"
-                echo "  4) Exit"
-                read -p "Choose an option (1-4): " -n 1 -r
-                echo
-                
-                case $REPLY in
-                    1)
-                        if [ -n "$LAST_FAILED_STEP" ]; then
-                            print_status "Resuming from Step $LAST_FAILED_STEP: $LAST_FAILED_STEP_NAME"
-                            cd "$PROJECT_PATH"
-                            # Add the failed step to skip list so we DON'T skip it
-                            # but skip all steps before it
-                            for ((i=1; i<$LAST_FAILED_STEP; i++)); do
-                                SKIP_STEPS+=("$i")
-                            done
-                        else
-                            print_status "Continuing with existing project..."
-                            cd "$PROJECT_PATH"
-                        fi
-                        ;;
-                    2)
-                        print_warning "This will DELETE all data in $PROJECT_PATH"
-                        read -p "Are you absolutely sure? Type 'yes' to confirm: " confirmation
-                        if [ "$confirmation" == "yes" ]; then
-                            print_status "Stopping DDEV if running..."
-                            cd "$PROJECT_PATH"
-                            ddev stop 2>/dev/null || true
-                            ddev delete -O 2>/dev/null || true
-                            cd "$SCRIPT_DIR"
-                            print_status "Deleting directory..."
-                            rm -rf "$PROJECT_PATH"
-                            print_status "Creating fresh project directory..."
-                            mkdir -p "$PROJECT_PATH"
-                            cd "$PROJECT_PATH"
-                        else
-                            print_error "Deletion cancelled. Exiting."
-                            exit 1
-                        fi
-                        ;;
-                    3)
-                        read -p "Enter new project name: " NEW_PROJECT_NAME
-                        if [ -z "$NEW_PROJECT_NAME" ]; then
-                            print_error "Project name cannot be empty. Exiting."
-                            exit 1
-                        fi
-                        PROJECT_NAME=$(find_available_project_name "$NEW_PROJECT_NAME")
-                        if [ "$PROJECT_NAME" != "$NEW_PROJECT_NAME" ]; then
-                            print_warning "Name '$NEW_PROJECT_NAME' is in use. Using: $PROJECT_NAME"
-                        fi
-                        PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
-                        print_status "Using new project name: $PROJECT_NAME"
-                        print_status "Project path: $PROJECT_PATH"
-                        if [ -d "$PROJECT_PATH" ]; then
-                            print_error "Directory $PROJECT_PATH also exists. Please run the script again with a unique name."
-                            exit 1
-                        fi
-                        mkdir -p "$PROJECT_PATH"
-                        cd "$PROJECT_PATH"
-                        ;;
-                    4)
-                        print_status "Exiting..."
-                        exit 0
-                        ;;
-                    *)
-                        print_error "Invalid option. Exiting."
-                        exit 1
-                        ;;
-                esac
-            fi
-        else
-            # Directory exists but is not a DDEV project
-            print_warning "Directory exists but is not a DDEV project"
-            echo "Options:"
-            echo "  1) Use this directory (will initialize DDEV in it)"
-            echo "  2) Delete directory and start fresh"
-            echo "  3) Choose a different project name"
-            echo "  4) Exit"
-            read -p "Choose an option (1-4): " -n 1 -r
-            echo
-            
-            case $REPLY in
-                1)
-                    print_status "Using existing directory..."
-                    cd "$PROJECT_PATH"
-                    ;;
-                2)
-                    print_warning "This will DELETE all data in $PROJECT_PATH"
-                    read -p "Are you absolutely sure? Type 'yes' to confirm: " confirmation
-                    if [ "$confirmation" == "yes" ]; then
-                        print_status "Deleting directory..."
-                        rm -rf "$PROJECT_PATH"
-                        print_status "Creating fresh project directory..."
-                        mkdir -p "$PROJECT_PATH"
-                        cd "$PROJECT_PATH"
-                    else
-                        print_error "Deletion cancelled. Exiting."
-                        exit 1
-                    fi
-                    ;;
-                3)
-                    read -p "Enter new project name: " NEW_PROJECT_NAME
-                    if [ -z "$NEW_PROJECT_NAME" ]; then
-                        print_error "Project name cannot be empty. Exiting."
-                        exit 1
-                    fi
-                    PROJECT_NAME=$(find_available_project_name "$NEW_PROJECT_NAME")
-                    if [ "$PROJECT_NAME" != "$NEW_PROJECT_NAME" ]; then
-                        print_warning "Name '$NEW_PROJECT_NAME' is in use. Using: $PROJECT_NAME"
-                    fi
-                    PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
-                    print_status "Using new project name: $PROJECT_NAME"
-                    print_status "Project path: $PROJECT_PATH"
-                    if [ -d "$PROJECT_PATH" ]; then
-                        print_error "Directory $PROJECT_PATH also exists. Please run the script again with a unique name."
-                        exit 1
-                    fi
-                    mkdir -p "$PROJECT_PATH"
-                    cd "$PROJECT_PATH"
-                    ;;
-                4)
-                    print_status "Exiting..."
-                    exit 0
-                    ;;
-                *)
-                    print_error "Invalid option. Exiting."
-                    exit 1
-                    ;;
-            esac
-        fi
-    else
-        print_status "Creating project directory in script directory..."
-        mkdir -p "$PROJECT_PATH"
-        cd "$PROJECT_PATH"
-        print_status "Project directory created: $PROJECT_PATH"
-    fi
-else
-    print_skip "Skipping project directory creation"
-    PROJECT_PATH="$SCRIPT_DIR/$PROJECT_NAME"
-    if [ -d "$PROJECT_PATH" ]; then
-        cd "$PROJECT_PATH"
-        print_status "Changed to existing directory: $PROJECT_PATH"
-    else
-        print_error "Project directory does not exist and step was skipped. Cannot continue."
-        exit 1
-    fi
-fi
-
-# Step 5: Initialize DDEV project
-if ! should_skip_step 5 && ask_step 5 "Initialize DDEV project configuration"; then
-    if [ -f ".ddev/config.yaml" ]; then
-        print_skip "DDEV project is already configured (.ddev/config.yaml exists)"
-        print_warning "If you want to reconfigure, delete .ddev directory first"
-    else
-        print_status "Initializing DDEV project..."
-        ddev config --project-type=drupal \
-            --docroot=html \
-            --php-version=$PHP_VERSION \
-            --database=mysql:$MYSQL_VERSION \
-            --nodejs-version=$NODEJS_VERSION \
-            --project-name="$PROJECT_NAME" \
-            --create-docroot
-
-        # Configure additional DDEV settings
-        print_status "Configuring additional DDEV settings..."
-        
-        # Create a custom config file to avoid duplicating keys
-        cat > .ddev/config.opensocial.yaml <<EOF
-# OpenSocial custom configuration
-# This file extends the main config.yaml
-
-# Additional PHP packages
-webimage_extra_packages: [php${PHP_VERSION}-gd, php${PHP_VERSION}-uploadprogress]
-
-# Increase PHP memory limit for Drupal
-php_memory_limit: 512M
-
-# Hooks for composer
-hooks:
-  post-start:
-    - exec: composer install --no-interaction || true
-EOF
-        print_status "DDEV project configured successfully"
-    fi
-else
-    print_skip "Skipping DDEV project initialization"
-fi
-
-# Step 6: Start DDEV
-if ! should_skip_step 6 && ask_step 6 "Start DDEV containers"; then
-    step_header 6 "Start DDEV Containers"
-    # Check if DDEV is already running
-    if ddev describe >/dev/null 2>&1 && ddev status 2>&1 | grep -q "running"; then
-        print_skip "DDEV is already running for this project"
-    else
-        print_status "Starting DDEV..."
-        ddev start
-        print_status "DDEV started successfully"
-    fi
-    step_complete 6 "DDEV is running"
-else
-    print_skip "Skipping DDEV start"
-fi
-
-# Step 7: Install Composer dependencies
-if ! should_skip_step 7 && ask_step 7 "Install OpenSocial (Commons version) via Composer"; then
-    if [ -f "composer.json" ]; then
-        print_skip "composer.json already exists. Skipping composer create."
-        print_status "Running composer install to ensure dependencies are up to date..."
-        ddev composer install
-    else
-        print_status "Creating Composer project for OpenSocial..."
-        
-        # Use the correct OpenSocial template
-        # For dev-master (latest development version)
-        if [ "$OPENSOCIAL_VERSION" = "dev-master" ]; then
-            print_status "Installing latest development version (dev-master)..."
-            ddev composer create-project rjzaar/commons_template:dev-master . --no-interaction --stability dev
-        else
-            # For specific version tags (e.g., 12.4.13, 13.0.0-beta1)
-            print_status "Installing version $OPENSOCIAL_VERSION..."
-            ddev composer create-project rjzaar/commons_template:$OPENSOCIAL_VERSION . --no-interaction
-        fi
-        
-        print_status "OpenSocial (Commons version)  Composer project created successfully"
-    fi
-    
-    # Ensure Drush is installed
-    print_status "Checking for Drush..."
-    if ! ddev drush version >/dev/null 2>&1; then
-        print_status "Drush not found. Installing Drush..."
-        ddev composer require drush/drush --dev
-        print_status "Drush installed successfully"
-    else
-        print_skip "Drush is already installed"
-    fi
-    
-    # Configure private file path BEFORE installation (required by OpenSocial)
-    print_status "Configuring private file path (required by OpenSocial)..."
-    
-    # Create private directory if it doesn't exist
-    if [ ! -d "../private" ]; then
-        print_status "Creating private files directory..."
-        mkdir -p ../private
-        chmod 755 ../private
-        print_status "Private directory created at ../private"
-    else
-        print_skip "Private directory already exists"
-    fi
-    
-    # Create settings.php if it doesn't exist yet
-    if [ ! -f "html/sites/default/settings.php" ] && [ -f "html/sites/default/default.settings.php" ]; then
-        print_status "Creating settings.php from default.settings.php..."
-        cp html/sites/default/default.settings.php html/sites/default/settings.php
-        chmod 644 html/sites/default/settings.php
-    fi
-    
-    # Add private file path to settings.php
-    if [ -f "html/sites/default/settings.php" ]; then
-        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" html/sites/default/settings.php; then
-            print_status "Adding private file path to settings.php..."
-            cat >> html/sites/default/settings.php <<'PRIVATEOF'
-
-/**
- * Private file path configuration.
- * 
- * This directory should be outside the web root for security.
- * This is REQUIRED by OpenSocial distribution.
- */
-$settings['file_private_path'] = '../private';
-PRIVATEOF
-            print_status "Private file path added to settings.php"
-        else
-            print_skip "Private file path already configured in settings.php"
-        fi
-        
-        # Verify the configuration
-        if grep -q "file_private_path.*private" html/sites/default/settings.php; then
-            print_status "✓ Private file path is properly configured and ready for installation"
-        else
-            print_error "Failed to configure private file path. OpenSocial installation may fail."
-        fi
-    else
-        print_warning "settings.php not found. It will be created during Drupal installation."
-        print_warning "Private file path will be configured after installation."
-    fi
-else
-    print_skip "Skipping Composer dependencies installation"
-fi
-
-# Step 8: Install Drupal/OpenSocial
-if ! should_skip_step 8 && ask_step 8 "Install Drupal/OpenSocial database"; then
-    # Check if Drupal is already installed
-    if ddev drush status --fields=bootstrap 2>/dev/null | grep -q "Successful"; then
-        print_skip "Drupal is already installed"
-        print_warning "If you want to reinstall, run: ddev drush site:install social --yes"
-    else
-        # Get absolute path for better debugging
-        CURRENT_DIR=$(pwd)
-        print_status "Working directory: $CURRENT_DIR"
-        
-        # Ensure private directory exists before installation
-        PRIVATE_DIR="../private"
-        PRIVATE_ABS_PATH="$(cd .. && pwd)/private"
-        if [ ! -d "$PRIVATE_DIR" ]; then
-            print_status "Creating private files directory..."
-            print_status "  Location: $PRIVATE_ABS_PATH"
-            mkdir -p "$PRIVATE_DIR"
-            chmod 775 "$PRIVATE_DIR"
-            print_status "✓ Private directory created at: $PRIVATE_ABS_PATH"
-        else
-            print_skip "Private directory already exists at: $PRIVATE_ABS_PATH"
-        fi
-        
-        # CRITICAL: Prepare settings.php BEFORE running site:install
-        print_status "Preparing settings.php before installation..."
-        
-        SETTINGS_FILE="html/sites/default/settings.php"
-        DEFAULT_SETTINGS="html/sites/default/default.settings.php"
-        SETTINGS_ABS_PATH="$CURRENT_DIR/$SETTINGS_FILE"
-        
-        print_status "  Settings file: $SETTINGS_ABS_PATH"
-        
-        # Ensure default directory is writable
-        chmod 755 html/sites/default
-        
-        # If settings.php doesn't exist, create it from default
-        if [ ! -f "$SETTINGS_FILE" ]; then
-            if [ -f "$DEFAULT_SETTINGS" ]; then
-                print_status "Creating settings.php from default.settings.php..."
-                print_status "  Source: $CURRENT_DIR/$DEFAULT_SETTINGS"
-                print_status "  Target: $SETTINGS_ABS_PATH"
-                cp "$DEFAULT_SETTINGS" "$SETTINGS_FILE"
-                print_status "✓ Created settings.php"
-            fi
-        else
-            print_skip "settings.php already exists at: $SETTINGS_ABS_PATH"
-        fi
-        
-        # Make settings.php writable for installation
-        chmod 666 "$SETTINGS_FILE"
-        print_status "Set $SETTINGS_FILE to writable (666)"
-        
-        # Add private file path BEFORE installation (OpenSocial checks this during install)
-        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
-            print_status "Adding private file path to settings.php..."
-            print_status "  File: $SETTINGS_ABS_PATH"
-            print_status "  Adding: \$settings['file_private_path'] = '../private';"
-            cat >> "$SETTINGS_FILE" <<'PRIVATEOF'
-
-/**
- * Private file path configuration.
- * 
- * This directory should be outside the web root for security.
- * This is REQUIRED by OpenSocial distribution before installation.
- */
-$settings['file_private_path'] = '../private';
-PRIVATEOF
-            print_status "✓ Private file path added to: $SETTINGS_ABS_PATH"
-        else
-            print_skip "Private file path already in: $SETTINGS_ABS_PATH"
-        fi
-        
-        # Ensure settings.ddev.php will be included (DDEV creates this file)
-        SETTINGS_DDEV="html/sites/default/settings.ddev.php"
-        SETTINGS_DDEV_ABS="$CURRENT_DIR/$SETTINGS_DDEV"
-        if ! grep -q "settings.ddev.php" "$SETTINGS_FILE"; then
-            print_status "Adding settings.ddev.php inclusion..."
-            print_status "  To file: $SETTINGS_ABS_PATH"
-            print_status "  Will include: $SETTINGS_DDEV_ABS (auto-generated by DDEV)"
-            cat >> "$SETTINGS_FILE" <<'DDEVEOF'
-
-/**
- * Automatically generated include for settings managed by ddev.
- */
-$ddev_settings = dirname(__FILE__) . '/settings.ddev.php';
-if (getenv('IS_DDEV_PROJECT') == 'true' && is_readable($ddev_settings)) {
-  require $ddev_settings;
-}
-DDEVEOF
-            print_status "✓ settings.ddev.php inclusion added to: $SETTINGS_ABS_PATH"
-        else
-            print_skip "settings.ddev.php inclusion already in: $SETTINGS_ABS_PATH"
-        fi
-        
-        print_status "Installing OpenSocial..."
-
-        # Install using Drush
-        # DDEV's settings.ddev.php will provide the database connection
-        ddev drush site:install social \
-            --account-name="$ADMIN_USER" \
-            --account-pass="$ADMIN_PASS" \
-            --account-mail="$ADMIN_MAIL" \
-            --site-name="$SITE_NAME" \
-            --site-mail="$SITE_MAIL" \
-            --locale=en \
-            --yes
-        
-        print_status "OpenSocial installed successfully"
-        
-        # Verify and fix settings.php after installation
-        print_status "Verifying configuration after installation..."
-        print_status "  Checking: $SETTINGS_ABS_PATH"
-        
-        # Ensure settings.php is writable for post-install configuration
-        chmod 666 "$SETTINGS_FILE"
-        
-        # Re-check private file path (site:install might have modified settings.php)
-        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
-            print_warning "Private file path was removed during installation. Re-adding..."
-            print_status "  Re-adding to: $SETTINGS_ABS_PATH"
-            cat >> "$SETTINGS_FILE" <<'PRIVATEOF2'
-
-/**
- * Private file path configuration.
- * 
- * This directory should be outside the web root for security.
- * This is REQUIRED by OpenSocial distribution.
- */
-$settings['file_private_path'] = '../private';
-PRIVATEOF2
-            print_status "✓ Private file path re-added"
-        fi
-        
-        # Re-check settings.ddev.php inclusion
-        if ! grep -q "settings.ddev.php" "$SETTINGS_FILE"; then
-            print_warning "settings.ddev.php inclusion was removed during installation. Re-adding..."
-            print_status "  Re-adding to: $SETTINGS_ABS_PATH"
-            cat >> "$SETTINGS_FILE" <<'DDEVEOF2'
-
-/**
- * Automatically generated include for settings managed by ddev.
- */
-$ddev_settings = dirname(__FILE__) . '/settings.ddev.php';
-if (getenv('IS_DDEV_PROJECT') == 'true' && is_readable($ddev_settings)) {
-  require $ddev_settings;
-}
-DDEVEOF2
-            print_status "✓ settings.ddev.php inclusion re-added"
-        fi
-        
-        # Ensure settings.local.php will be included
-        SETTINGS_LOCAL="html/sites/default/settings.local.php"
-        SETTINGS_LOCAL_ABS="$CURRENT_DIR/$SETTINGS_LOCAL"
-        if ! grep -q "settings.local.php" "$SETTINGS_FILE"; then
-            print_status "Adding settings.local.php inclusion..."
-            print_status "  To file: $SETTINGS_ABS_PATH"
-            print_status "  Will include: $SETTINGS_LOCAL_ABS (created in Step 13)"
-            cat >> "$SETTINGS_FILE" <<'LOCALEOF'
-
-/**
- * Load local development override configuration, if available.
- */
-if (file_exists($app_root . '/' . $site_path . '/settings.local.php')) {
-  include $app_root . '/' . $site_path . '/settings.local.php';
-}
-LOCALEOF
-            print_status "✓ settings.local.php inclusion added to: $SETTINGS_ABS_PATH"
-        else
-            print_skip "settings.local.php inclusion already in: $SETTINGS_ABS_PATH"
-        fi
-        
-        # Set proper permissions on settings.php (read-only for security)
-        chmod 444 "$SETTINGS_FILE"
-        chmod 755 html/sites/default
-        print_status "Set proper permissions on: $SETTINGS_ABS_PATH (444 - read-only)"
-        
-        # Verify final configuration
-        print_status "Final verification of: $SETTINGS_ABS_PATH"
-        if grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
-            print_status "  ✓ Private file path is configured"
-        else
-            print_error "  ✗ Private file path is missing!"
-        fi
-        
-        if grep -q "settings.ddev.php" "$SETTINGS_FILE"; then
-            print_status "  ✓ settings.ddev.php inclusion is configured"
-        else
-            print_error "  ✗ settings.ddev.php inclusion is missing!"
-        fi
-        
-        if grep -q "settings.local.php" "$SETTINGS_FILE"; then
-            print_status "  ✓ settings.local.php inclusion is configured"
-        else
-            print_error "  ✗ settings.local.php inclusion is missing!"
-        fi
-        
-        # Clear cache to apply all settings
-        print_status "Clearing cache to apply settings..."
-        ddev drush cr
-        
-        print_status "=================="
-        print_status "Configuration Summary:"
-        print_status "=================="
-        print_status "Settings file: $SETTINGS_ABS_PATH"
-        print_status "Private directory: $PRIVATE_ABS_PATH"
-        print_status "DDEV settings: $SETTINGS_DDEV_ABS (auto-created by DDEV)"
-        print_status "Local settings: $SETTINGS_LOCAL_ABS (will be created in Step 13)"
-        print_status "=================="
-        print_status "✓ Installation and configuration complete"
-    fi
-else
-    print_skip "Skipping Drupal/OpenSocial installation"
-fi
-
-# Step 9: Configure site settings
-if ! should_skip_step 9 && ask_step 9 "Configure site settings"; then
-    step_header 9 "Configure Site Settings"
-    
-    # CRITICAL: Check and remove Ultimate Cron FIRST before any config operations
-    print_status "Pre-check: Checking for incompatible modules..."
-    
-    # Check if Ultimate Cron is installed/enabled
-    if ddev drush pml 2>/dev/null | grep -q "ultimate_cron"; then
-        print_warning "Ultimate Cron detected - this module causes Drush compatibility issues"
-        print_status "Removing Ultimate Cron to prevent configuration errors..."
-        
-        # Try to uninstall the module
-        if ddev drush pm:uninstall ultimate_cron -y 2>/dev/null; then
-            print_status "✓ Ultimate Cron uninstalled successfully"
-        else
-            print_warning "Could not uninstall via Drush, attempting database removal..."
-            
-            # Force remove from database if Drush fails
-            ddev drush sqlq "DELETE FROM config WHERE name LIKE 'ultimate_cron%';" 2>/dev/null || true
-            ddev drush sqlq "DELETE FROM key_value WHERE collection = 'system.schema' AND name = 'ultimate_cron';" 2>/dev/null || true
-        fi
-        
-        # Also remove from filesystem if present
-        if [ -d "html/modules/contrib/ultimate_cron" ]; then
-            print_status "Removing Ultimate Cron from filesystem..."
-            rm -rf html/modules/contrib/ultimate_cron
-        fi
-        
-        # Clear cache after removal
-        ddev drush cr 2>/dev/null || true
-        print_status "✓ Ultimate Cron compatibility issue resolved"
-    fi
-    
-    # Now configure site settings with better error handling
-    print_status "Configuring site settings..."
-    
-    # Function to safely run config commands
-    safe_config_set() {
-        local config_path=$1
-        local value=$2
-        local description=$3
-        
-        if ddev drush config:set "$config_path" "$value" --yes 2>/dev/null; then
-            print_status "✓ Set $description"
-            return 0
-        else
-            print_warning "Could not set $description (may already be configured)"
             return 1
         fi
-    }
-    
-    # Set timezone
-    print_status "Setting timezone to $SITE_TIMEZONE..."
-    safe_config_set "system.date timezone.default" "$SITE_TIMEZONE" "timezone"
-    
-    # Set date formats  
-    print_status "Configuring date settings..."
-    safe_config_set "system.date timezone.user.configurable" "1" "user timezone configuration"
-    
-    # Configure file system settings
-    print_status "Configuring file system paths..."
-    safe_config_set "system.file path.temporary" "/tmp" "temporary file path"
-    
-    # Configure performance settings
-    print_status "Configuring performance settings..."
-    safe_config_set "system.performance css.preprocess" "1" "CSS preprocessing"
-    safe_config_set "system.performance js.preprocess" "1" "JS preprocessing"
-    
-    # Configure error logging
-    print_status "Configuring error logging..."
-    safe_config_set "system.logging error_level" "verbose" "error level"
-    
-    # Additional safety: disable Ultimate Cron via settings if it persists
-    print_status "Adding Ultimate Cron blocking to settings..."
-    SETTINGS_FILE="html/sites/default/settings.php"
-    if [ -f "$SETTINGS_FILE" ]; then
-        if ! grep -q "ultimate_cron.*uninstall" "$SETTINGS_FILE"; then
-            chmod 644 "$SETTINGS_FILE" 2>/dev/null || true
-            cat >> "$SETTINGS_FILE" <<'BLOCKEOF'
-
-/**
- * Force disable Ultimate Cron module to prevent Drush conflicts
- */
-$settings['extension.blacklist']['ultimate_cron'] = TRUE;
-BLOCKEOF
-            chmod 444 "$SETTINGS_FILE" 2>/dev/null || true
-            print_status "✓ Added Ultimate Cron blocking to settings.php"
-        fi
     fi
-    
-    step_complete 9 "Site settings configured"
-else
-    print_skip "Skipping site settings configuration"
-fi
-
-# Step 10: Enable recommended modules
-if ! should_skip_step 10 && ask_step 10 "Enable recommended OpenSocial modules"; then
-    print_status "Enabling recommended OpenSocial modules..."
-
-    # Core social modules (most should already be enabled, but ensuring)
-    ddev drush en -y \
-        social_user \
-        social_profile \
-        social_group \
-        social_event \
-        social_topic \
-        social_search \
-        social_comment \
-        social_like \
-        social_follow_content \
-        social_tagging 2>/dev/null || print_warning "Some modules may already be enabled"
-
-    # Enable additional useful modules
-    ddev drush en -y \
-        admin_toolbar \
-        admin_toolbar_tools \
-        pathauto 2>/dev/null || print_warning "Some modules may already be enabled"
-
-    print_status "Setting up default permissions..."
-
-    # Set reasonable file upload limits
-    ddev drush config:set system.file allow_insecure_uploads false --yes
-    
-    print_status "Recommended modules enabled successfully"
-else
-    print_skip "Skipping module enablement"
-fi
-
-# Step 11: Set up default content settings
-if ! should_skip_step 11 && ask_step 11 "Configure user and content settings"; then
-    print_status "Configuring content settings..."
-
-    # Enable user registration with admin approval (more secure default)
-    ddev drush config:set user.settings register visitors_admin_approval --yes
-
-    # Configure user email verification
-    ddev drush config:set user.settings verify_mail 1 --yes
-
-    # Set default user picture
-    ddev drush config:set user.settings anonymous "Anonymous" --yes
-    
-    print_status "Content settings configured successfully"
-else
-    print_skip "Skipping content settings configuration"
-fi
-
-# Step 12: Clear cache and rebuild
-if ! should_skip_step 12 && ask_step 12 "Clear cache and rebuild permissions"; then
-    print_status "Clearing Drupal cache and rebuilding..."
-    ddev drush cr
-
-    # Rebuild node access permissions
-    print_status "Rebuilding node access permissions..."
-    ddev drush php-eval "node_access_rebuild();" 2>/dev/null || print_warning "Node access rebuild may have failed (this is OK if no content exists yet)"
-    
-    print_status "Cache cleared and permissions rebuilt successfully"
-else
-    print_skip "Skipping cache clear and rebuild"
-fi
-
-# Step 13: Set up development settings (optional)
-if ! should_skip_step 13 && ask_step 13 "Set up development settings (settings.local.php)"; then
-    print_status "Setting up development-friendly settings..."
-    
-    CURRENT_DIR=$(pwd)
-    PRIVATE_DIR="../private"
-    PRIVATE_ABS_PATH="$(cd .. && pwd)/private"
-    SETTINGS_FILE="html/sites/default/settings.php"
-    SETTINGS_LOCAL="html/sites/default/settings.local.php"
-    SETTINGS_ABS_PATH="$CURRENT_DIR/$SETTINGS_FILE"
-    SETTINGS_LOCAL_ABS="$CURRENT_DIR/$SETTINGS_LOCAL"
-
-    # Verify private directory exists (should have been created in Step 7)
-    if [ ! -d "$PRIVATE_DIR" ]; then
-        print_warning "Private directory not found. Creating it now..."
-        print_status "  Location: $PRIVATE_ABS_PATH"
-        mkdir -p "$PRIVATE_DIR"
-        chmod 755 "$PRIVATE_DIR"
-        print_status "✓ Private directory created at: $PRIVATE_ABS_PATH"
-    else
-        print_skip "Private directory already exists at: $PRIVATE_ABS_PATH"
-    fi
-
-    # Verify private file path in settings.php (should have been added in Step 8)
-    if [ -f "$SETTINGS_FILE" ]; then
-        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
-            print_warning "Private file path not found in settings.php. Adding it now..."
-            print_status "  File: $SETTINGS_ABS_PATH"
-            chmod 644 "$SETTINGS_FILE"
-            cat >> "$SETTINGS_FILE" <<'PRIVATEOF'
-
-/**
- * Private file path configuration.
- * 
- * This directory should be outside the web root for security.
- * This is REQUIRED by OpenSocial distribution.
- */
-$settings['file_private_path'] = '../private';
-PRIVATEOF
-            chmod 444 "$SETTINGS_FILE"
-            print_status "✓ Private file path added to: $SETTINGS_ABS_PATH"
-        else
-            print_skip "Private file path already configured in: $SETTINGS_ABS_PATH"
-        fi
-    else
-        print_warning "Settings file not found at: $SETTINGS_ABS_PATH"
-    fi
-
-    # Create settings.local.php for development
-    if [ -f "$SETTINGS_LOCAL" ]; then
-        print_skip "settings.local.php already exists at: $SETTINGS_LOCAL_ABS"
-    else
-        print_status "Creating settings.local.php for development..."
-        print_status "  Location: $SETTINGS_LOCAL_ABS"
-        cat > "$SETTINGS_LOCAL" <<'LOCALEOF'
-<?php
-
-/**
- * Development settings for OpenSocial.
- */
-
-// Disable CSS and JS aggregation.
-$config['system.performance']['css']['preprocess'] = FALSE;
-$config['system.performance']['js']['preprocess'] = FALSE;
-
-// Disable the render cache.
-$settings['cache']['bins']['render'] = 'cache.backend.null';
-
-// Disable Dynamic Page Cache.
-$settings['cache']['bins']['dynamic_page_cache'] = 'cache.backend.null';
-
-// Allow test modules and themes.
-$settings['extension_discovery_scan_tests'] = TRUE;
-
-// Enable access to rebuild.php.
-$settings['rebuild_access'] = TRUE;
-
-// Skip file system permissions hardening.
-$settings['skip_permissions_hardening'] = TRUE;
-
-// Show all error messages.
-$config['system.logging']['error_level'] = 'verbose';
-
-// Disable CSS and JS preprocessing.
-$config['system.performance']['css']['preprocess'] = FALSE;
-$config['system.performance']['js']['preprocess'] = FALSE;
-LOCALEOF
-
-        print_status "✓ Created settings.local.php at: $SETTINGS_LOCAL_ABS"
-    fi
-
-    # Ensure settings.php includes settings.local.php
-    if [ -f "$SETTINGS_FILE" ]; then
-        if ! grep -q "settings.local.php" "$SETTINGS_FILE" 2>/dev/null; then
-            print_status "Adding settings.local.php inclusion to settings.php..."
-            print_status "  Main file: $SETTINGS_ABS_PATH"
-            print_status "  Will include: $SETTINGS_LOCAL_ABS"
-            chmod 644 "$SETTINGS_FILE"
-            cat >> "$SETTINGS_FILE" <<'SETTINGSEOF'
-
-/**
- * Load local development override configuration, if available.
- */
-if (file_exists($app_root . '/' . $site_path . '/settings.local.php')) {
-  include $app_root . '/' . $site_path . '/settings.local.php';
+    return 0
 }
-SETTINGSEOF
-            chmod 444 "$SETTINGS_FILE"
-            print_status "✓ settings.local.php inclusion added to: $SETTINGS_ABS_PATH"
-        else
-            print_skip "settings.local.php inclusion already in: $SETTINGS_ABS_PATH"
-        fi
-    fi
-    
-    # Final verification of private file path
-    print_status "Final verification..."
-    if [ -f "$SETTINGS_FILE" ] && grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
-        print_status "  ✓ Private file path is properly configured in: $SETTINGS_ABS_PATH"
-    else
-        print_error "  ✗ Private file path is not properly configured!"
-        print_error "     File: $SETTINGS_ABS_PATH"
-        print_error "     Please add: \$settings['file_private_path'] = '../private';"
-    fi
-    
-    print_status "=================="
-    print_status "Development Settings Summary:"
-    print_status "=================="
-    print_status "Settings file: $SETTINGS_ABS_PATH"
-    print_status "Local settings: $SETTINGS_LOCAL_ABS"
-    print_status "Private directory: $PRIVATE_ABS_PATH"
-    print_status "=================="
-else
-    print_skip "Skipping development settings setup"
-fi
 
-# Step 14: Enable workflow_assignment module
-if ! should_skip_step 14 && ask_step 14 "Enable workflow_assignment module"; then
-    step_header 14 "Enable Workflow Assignment Module"
-    print_status "Checking for workflow_assignment module..."
+################################################################################
+# Utility Functions
+################################################################################
+
+check_prerequisites() {
+    print_status "Verifying system prerequisites..."
     
-    # Check if module exists
-    if ddev drush pml --type=module --no-core 2>/dev/null | grep -q "workflow"; then
-        print_status "Workflow module found. Enabling workflow_assignment..."
-        
-        # Enable workflow and workflow_assignment modules
-        if ddev drush en workflow workflow_assignment -y; then
-            print_status "✓ workflow_assignment module enabled successfully"
-        else
-            print_error "Failed to enable workflow_assignment module"
-            print_warning "The module may not be installed. You may need to install it via composer:"
-            print_warning "  ddev composer require drupal/workflow"
-        fi
+    local missing_deps=()
+    
+    print_substep "Checking for DDEV..."
+    if ! command -v ddev &> /dev/null; then
+        missing_deps+=("ddev")
     else
-        print_warning "Workflow module not found. Installing via composer..."
+        print_success "DDEV found: $(ddev version | head -n 1)"
+    fi
+    
+    print_substep "Checking for Composer..."
+    if ! command -v composer &> /dev/null; then
+        missing_deps+=("composer")
+    else
+        print_success "Composer found: $(composer --version | head -n 1)"
+    fi
+    
+    print_substep "Checking for Git..."
+    if ! command -v git &> /dev/null; then
+        missing_deps+=("git")
+    else
+        print_success "Git found: $(git --version)"
+    fi
+    
+    if [ ${#missing_deps[@]} -ne 0 ]; then
+        print_error "Missing required dependencies: ${missing_deps[*]}"
+        echo ""
+        echo "Please install missing dependencies:"
+        echo "  DDEV: https://ddev.readthedocs.io/en/stable/#installation"
+        echo "  Composer: https://getcomposer.org/download/"
+        echo "  Git: sudo apt-get install git"
+        exit 1
+    fi
+    
+    print_success "All prerequisites satisfied"
+}
+
+find_available_url() {
+    local base_name=$1
+    local url_candidate="${base_name}"
+    local counter=1
+    
+    print_status "Checking URL availability..."
+    
+    while ddev describe "${url_candidate}" &>/dev/null; do
+        print_substep "URL '${url_candidate}' is already in use"
+        url_candidate="${base_name}${counter}"
+        counter=$((counter + 1))
+    done
+    
+    print_success "Available URL found: ${url_candidate}"
+    echo "${url_candidate}"
+}
+
+################################################################################
+# Installation Steps
+################################################################################
+
+# Step 1: Pre-flight checks
+step_preflight() {
+    if ! should_skip_step 1 && ask_step 1 "Pre-flight checks"; then
+        step_header 1 "Running Pre-flight Checks"
         
-        # Install workflow module
-        if ddev composer require drupal/workflow; then
-            print_status "✓ Workflow module installed"
-            
-            # Enable the modules
-            if ddev drush en workflow workflow_assignment -y; then
-                print_status "✓ workflow_assignment module enabled successfully"
+        check_prerequisites
+        
+        print_status "Checking Docker status..."
+        if ! docker ps &>/dev/null; then
+            print_error "Docker is not running"
+            print_status "Starting Docker..."
+            sudo systemctl start docker
+            sleep 3
+            print_success "Docker started successfully"
+        else
+            print_success "Docker is running"
+        fi
+        
+        step_complete 1 "Pre-flight checks"
+    else
+        print_skip "Skipping pre-flight checks"
+    fi
+}
+
+# Step 2: Set up project directory
+step_setup_directory() {
+    if ! should_skip_step 2 && ask_step 2 "Set up project directory"; then
+        step_header 2 "Setting Up Project Directory"
+        
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        print_status "Script directory: $script_dir"
+        
+        # Get project name
+        if [ -z "$PROJECT_NAME" ]; then
+            read -p "Enter project name (default: opensocial): " PROJECT_NAME
+            PROJECT_NAME=${PROJECT_NAME:-opensocial}
+        fi
+        
+        print_status "Project name: $PROJECT_NAME"
+        
+        # Find available URL
+        PROJECT_URL=$(find_available_url "$PROJECT_NAME")
+        
+        # Set directory path
+        OPENSOCIAL_DIR="$script_dir/$PROJECT_URL"
+        print_status "Installation directory: $OPENSOCIAL_DIR"
+        
+        # Create directory
+        if [ -d "$OPENSOCIAL_DIR" ]; then
+            print_warning "Directory already exists: $OPENSOCIAL_DIR"
+            read -p "Remove existing directory and continue? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                print_substep "Removing existing directory..."
+                rm -rf "$OPENSOCIAL_DIR"
+                print_success "Directory removed"
             else
-                print_error "Failed to enable workflow_assignment module after installation"
+                print_error "Installation cancelled"
+                exit 1
+            fi
+        fi
+        
+        print_substep "Creating project directory..."
+        mkdir -p "$OPENSOCIAL_DIR"
+        cd "$OPENSOCIAL_DIR"
+        print_success "Project directory created: $OPENSOCIAL_DIR"
+        
+        step_complete 2 "Project directory setup"
+    else
+        print_skip "Skipping directory setup"
+    fi
+}
+
+# Step 3: Create Composer project
+step_create_composer_project() {
+    if ! should_skip_step 3 && ask_step 3 "Create Composer project from template"; then
+        step_header 3 "Creating Composer Project from Template"
+        
+        print_status "Using template: rjzaar/commons_template"
+        print_substep "This may take several minutes..."
+        
+        if composer create-project rjzaar/commons_template:dev-master . --no-interaction; then
+            print_success "Composer project created successfully"
+            
+            print_substep "Verifying project structure..."
+            if [ -f "composer.json" ]; then
+                print_success "composer.json found"
+            else
+                print_error "composer.json not found - project creation may have failed"
+                exit 1
             fi
         else
-            print_error "Failed to install workflow module via composer"
+            print_error "Composer project creation failed"
+            exit 1
         fi
-    fi
-    
-    # Clear cache
-    print_status "Clearing cache..."
-    ddev drush cr
-    
-    step_complete 14 "Workflow Assignment module ready"
-else
-    print_skip "Skipping workflow_assignment module enablement"
-fi
-
-# Step 15: Configure workflow for basic_page content type
-if ! should_skip_step 15 && ask_step 15 "Configure workflow for basic_page content type"; then
-    step_header 15 "Configure Workflow for Basic Page"
-    print_status "Configuring workflow for basic_page content type..."
-    
-    # First, ensure basic_page content type exists
-    print_status "Checking if basic_page content type exists..."
-    if ddev drush php-eval "echo entity_load('node_type', 'page') ? 'exists' : 'not found';" 2>/dev/null | grep -q "exists"; then
-        print_status "✓ basic_page (page) content type found"
         
-        # Create a workflow via Drush
-        print_status "Creating workflow via configuration..."
-        
-        # Create workflow configuration using drush php-eval
-        ddev drush php-eval "
-          \$workflow = \Drupal\workflow\Entity\Workflow::create([
-            'id' => 'basic_page_workflow',
-            'label' => 'Basic Page Workflow',
-            'type' => 'workflow_type_complex',
-          ]);
-          
-          // Add states
-          \$workflow->getTypePlugin()->addState('draft', 'Draft');
-          \$workflow->getTypePlugin()->addState('review', 'Review');
-          \$workflow->getTypePlugin()->addState('published', 'Published');
-          
-          try {
-            \$workflow->save();
-            echo 'Workflow created successfully';
-          } catch (\Exception \$e) {
-            echo 'Error: ' . \$e->getMessage();
-          }
-        " 2>/dev/null || print_warning "Workflow creation encountered issues - may need manual configuration"
-        
-        print_status "✓ Workflow configuration complete"
+        step_complete 3 "Composer project creation"
     else
-        # Create basic_page content type if it doesn't exist
-        print_status "basic_page content type not found. Creating it..."
+        print_skip "Skipping Composer project creation"
+    fi
+}
+
+# Step 4: Create private directory
+step_create_private_directory() {
+    if ! should_skip_step 4 && ask_step 4 "Create private files directory"; then
+        step_header 4 "Creating Private Files Directory"
         
-        if ddev drush php-eval "
-          \$node_type = \Drupal\node\Entity\NodeType::create([
-            'type' => 'page',
-            'name' => 'Basic page',
-            'description' => 'Use basic pages for your static content.',
-          ]);
-          \$node_type->save();
-          echo 'Basic page content type created';
-        " 2>/dev/null; then
-            print_status "✓ basic_page content type created"
+        print_status "Setting up private files directory outside web root..."
+        
+        if [ ! -d "../private" ]; then
+            print_substep "Creating ../private directory..."
+            mkdir -p ../private
+            print_success "Private directory created: $(realpath ../private)"
         else
-            print_error "Failed to create basic_page content type"
+            print_substep "Private directory already exists"
+            print_success "Using existing directory: $(realpath ../private)"
         fi
-    fi
-    
-    # Clear cache
-    ddev drush cr
-    
-    step_complete 15 "Workflow configured for basic_page"
-else
-    print_skip "Skipping workflow configuration for basic_page"
-fi
-
-# Step 16: Create workflow assignments and test page
-if ! should_skip_step 16 && ask_step 16 "Create workflow assignments and test page"; then
-    step_header 16 "Create Test Content with Workflow"
-    print_status "Creating workflow assignments and test content..."
-    
-    # Get admin user ID
-    ADMIN_UID=$(ddev drush user:information admin --fields=uid --format=string 2>/dev/null || echo "1")
-    print_status "Admin user ID: $ADMIN_UID"
-    
-    # Create two workflow assignments using Drush PHP eval
-    print_status "Creating workflow assignment 'one'..."
-    ddev drush php-eval "
-      \$assignment = \Drupal\workflow_assignment\Entity\WorkflowAssignment::create([
-        'id' => 'one',
-        'label' => 'Assignment One',
-        'workflow' => 'basic_page_workflow',
-        'assigned_user' => $ADMIN_UID,
-      ]);
-      try {
-        \$assignment->save();
-        echo 'Assignment one created';
-      } catch (\Exception \$e) {
-        echo 'Note: ' . \$e->getMessage();
-      }
-    " 2>/dev/null || print_warning "Assignment 'one' may already exist or requires manual creation"
-    
-    print_status "Creating workflow assignment 'two'..."
-    ddev drush php-eval "
-      \$assignment = \Drupal\workflow_assignment\Entity\WorkflowAssignment::create([
-        'id' => 'two',
-        'label' => 'Assignment Two',
-        'workflow' => 'basic_page_workflow',
-        'assigned_user' => $ADMIN_UID,
-      ]);
-      try {
-        \$assignment->save();
-        echo 'Assignment two created';
-      } catch (\Exception \$e) {
-        echo 'Note: ' . \$e->getMessage();
-      }
-    " 2>/dev/null || print_warning "Assignment 'two' may already exist or requires manual creation"
-    
-    # Create a basic page with title "test"
-    print_status "Creating test basic page..."
-    TEST_NID=$(ddev drush php-eval "
-      \$node = \Drupal\node\Entity\Node::create([
-        'type' => 'page',
-        'title' => 'test',
-        'body' => [
-          'value' => 'This is a test page with workflow assignments.',
-          'format' => 'basic_html',
-        ],
-        'uid' => $ADMIN_UID,
-        'status' => 1,
-      ]);
-      
-      try {
-        \$node->save();
-        echo \$node->id();
-      } catch (\Exception \$e) {
-        echo 'error';
-      }
-    " 2>/dev/null)
-    
-    if [ "$TEST_NID" != "error" ] && [ -n "$TEST_NID" ]; then
-        print_status "✓ Test page created with NID: $TEST_NID"
         
-        # Try to assign the workflow to the node
-        print_status "Assigning workflow to test page..."
-        ddev drush php-eval "
-          \$node = \Drupal\node\Entity\Node::load($TEST_NID);
-          if (\$node) {
-            // Attempt to set workflow state
-            if (\$node->hasField('workflow_state')) {
-              \$node->set('workflow_state', 'draft');
-              \$node->save();
-              echo 'Workflow state set to draft';
-            }
-          }
-        " 2>/dev/null || print_warning "Workflow assignment may need to be done via UI"
-        
-        print_status "✓ Test content created successfully"
-        print_status "  Node ID: $TEST_NID"
-        print_status "  Title: test"
-        print_status "  Type: basic_page"
+        step_complete 4 "Private directory creation"
     else
-        print_error "Failed to create test page"
+        print_skip "Skipping private directory creation"
+    fi
+}
+
+# Step 5: Initialize DDEV
+step_initialize_ddev() {
+    if ! should_skip_step 5 && ask_step 5 "Initialize DDEV configuration"; then
+        step_header 5 "Initializing DDEV Configuration"
+        
+        print_status "Configuring DDEV for project: $PROJECT_URL"
+        print_substep "Project type: php"
+        print_substep "Docroot: html"
+        print_substep "Project name: $PROJECT_URL"
+        
+        if ddev config --project-type=php --docroot=html --project-name="$PROJECT_URL" --php-version=8.2; then
+            print_success "DDEV configuration created"
+            
+            print_substep "Verifying DDEV configuration..."
+            if [ -f ".ddev/config.yaml" ]; then
+                print_success ".ddev/config.yaml created successfully"
+            else
+                print_error "DDEV config file not found"
+                exit 1
+            fi
+        else
+            print_error "DDEV configuration failed"
+            exit 1
+        fi
+        
+        step_complete 5 "DDEV initialization"
+    else
+        print_skip "Skipping DDEV initialization"
+    fi
+}
+
+# Step 6: Start DDEV
+step_start_ddev() {
+    if ! should_skip_step 6 && ask_step 6 "Start DDEV containers"; then
+        step_header 6 "Starting DDEV Containers"
+        
+        print_status "Starting Docker containers for $PROJECT_URL..."
+        print_substep "This may take a few minutes on first run..."
+        
+        if ddev start; then
+            print_success "DDEV containers started successfully"
+            
+            print_substep "Verifying container status..."
+            if ddev describe &>/dev/null; then
+                print_success "All containers are running"
+                
+                # Display project info
+                echo ""
+                echo -e "${CYAN}Project Information:${NC}"
+                ddev describe | grep -E "(Name|Status|Primary URL)" | sed 's/^/  /'
+                echo ""
+            else
+                print_warning "Could not verify container status"
+            fi
+        else
+            print_error "Failed to start DDEV containers"
+            exit 1
+        fi
+        
+        step_complete 6 "DDEV container startup"
+    else
+        print_skip "Skipping DDEV startup"
+    fi
+}
+
+# Step 6.5: Configure GitHub token
+step_configure_github_token() {
+    if ! should_skip_step 6.5 && ask_step 6.5 "Configure GitHub authentication token"; then
+        step_header 6.5 "Configuring GitHub Authentication"
+        
+        if [ -n "$GITHUB_TOKEN" ]; then
+            print_status "GitHub token detected, configuring Composer authentication..."
+            
+            print_substep "Setting up OAuth token for github.com..."
+            if ddev composer config --global --auth github-oauth.github.com "$GITHUB_TOKEN"; then
+                print_success "GitHub token configured successfully"
+                print_substep "API rate limit increased to 5,000 requests/hour"
+            else
+                print_warning "Failed to configure GitHub token"
+                print_substep "Continuing with unauthenticated access (60 requests/hour limit)"
+            fi
+        else
+            print_warning "No GitHub token provided"
+            print_substep "Using unauthenticated access (60 requests/hour limit)"
+            print_substep "To use a token: export GITHUB_TOKEN='your_token' before running this script"
+            print_substep "Generate a token at: https://github.com/settings/tokens"
+        fi
+        
+        step_complete 6.5 "GitHub authentication configuration"
+    else
+        print_skip "Skipping GitHub token configuration"
+    fi
+}
+
+# Step 7: Install dependencies
+step_install_dependencies() {
+    if ! should_skip_step 7 && ask_step 7 "Install Composer dependencies"; then
+        step_header 7 "Installing Composer Dependencies"
+        
+        print_status "Installing all project dependencies..."
+        print_substep "This includes Drupal core, OpenSocial, and all required modules"
+        print_substep "This step may take 5-10 minutes..."
+        
+        if ddev composer install; then
+            print_success "All dependencies installed successfully"
+            
+            print_substep "Verifying installation..."
+            if [ -d "html/core" ]; then
+                print_success "Drupal core installed"
+            fi
+            if [ -d "html/profiles/contrib/social" ]; then
+                print_success "OpenSocial profile installed"
+            fi
+            
+            print_substep "Counting installed packages..."
+            local package_count=$(ddev composer show | wc -l)
+            print_success "Total packages installed: $package_count"
+        else
+            print_error "Dependency installation failed"
+            exit 1
+        fi
+        
+        step_complete 7 "Dependency installation"
+    else
+        print_skip "Skipping dependency installation"
+    fi
+}
+
+# Step 8: Install Drupal
+step_install_drupal() {
+    if ! should_skip_step 8 && ask_step 8 "Install Drupal with OpenSocial profile"; then
+        step_header 8 "Installing Drupal with OpenSocial Profile"
+        
+        print_status "Running Drupal installation with OpenSocial profile..."
+        print_substep "Profile: social"
+        print_substep "Site name: $SITE_NAME"
+        print_substep "Admin username: $ADMIN_USER"
+        print_substep "This step may take 5-10 minutes..."
+        
+        if ddev drush site:install social \
+            --site-name="$SITE_NAME" \
+            --account-name="$ADMIN_USER" \
+            --account-pass="$ADMIN_PASS" \
+            --account-mail="$ADMIN_EMAIL" \
+            --site-mail="$SITE_EMAIL" \
+            --yes; then
+            
+            print_success "Drupal installed successfully with OpenSocial profile"
+            
+            print_substep "Verifying installation..."
+            if ddev drush status bootstrap | grep -q "Successful"; then
+                print_success "Drupal bootstrap successful"
+            fi
+            
+            print_substep "Checking database..."
+            if ddev drush sqlq "SELECT COUNT(*) FROM users" &>/dev/null; then
+                print_success "Database connection verified"
+            fi
+        else
+            print_error "Drupal installation failed"
+            exit 1
+        fi
+        
+        step_complete 8 "Drupal installation"
+    else
+        print_skip "Skipping Drupal installation"
+    fi
+}
+
+# Step 9: Configure site settings
+step_configure_site() {
+    if ! should_skip_step 9 && ask_step 9 "Configure site settings"; then
+        step_header 9 "Configuring Site Settings"
+        
+        print_status "Applying site configuration..."
+        
+        # Set timezone
+        print_substep "Setting site timezone to $SITE_TIMEZONE..."
+        if ddev drush config:set system.date timezone.default "$SITE_TIMEZONE" --yes; then
+            print_success "Timezone configured"
+        else
+            print_warning "Could not set timezone"
+        fi
+        
+        # Set email settings
+        print_substep "Configuring email settings..."
+        if ddev drush config:set system.site mail "$SITE_EMAIL" --yes; then
+            print_success "Site email configured"
+        else
+            print_warning "Could not set site email"
+        fi
+        
+        # Add private file path to settings.php
+        print_substep "Configuring private file path..."
+        if [ -f "html/sites/default/settings.php" ]; then
+            if ! grep -q "\$settings\['file_private_path'\] =  '../private';" html/sites/default/settings.php; then
+                echo "\$settings['file_private_path'] = '../private';" >> html/sites/default/settings.php
+                print_success "Private file path added to settings.php"
+            else
+                print_substep "Private file path already configured"
+            fi
+        else
+            print_warning "settings.php not found"
+        fi
+        
+        # Clear cache
+        print_substep "Clearing Drupal cache..."
+        if ddev drush cache:rebuild; then
+            print_success "Cache cleared successfully"
+        else
+            print_warning "Cache clear failed"
+        fi
+        
+        step_complete 9 "Site configuration"
+    else
+        print_skip "Skipping site configuration"
+    fi
+}
+
+# Step 10: Create demo content
+step_create_demo_content() {
+    if ! should_skip_step 10 && ask_step 10 "Create demo content"; then
+        step_header 10 "Creating Demo Content"
+        
+        print_status "Installing demo content module..."
+        
+        # Enable demo content module if it exists
+        if ddev drush pm:list --status=disabled | grep -q "social_demo"; then
+            print_substep "Enabling social_demo module..."
+            if ddev drush pm:enable social_demo -y; then
+                print_success "Demo content module enabled"
+                
+                print_substep "Generating demo users, groups, and content..."
+                if ddev drush social-demo:add --all; then
+                    print_success "Demo content created successfully"
+                else
+                    print_warning "Demo content generation had issues"
+                fi
+            else
+                print_warning "Could not enable demo content module"
+            fi
+        else
+            print_substep "Demo content module not available, skipping"
+        fi
+        
+        step_complete 10 "Demo content creation"
+    else
+        print_skip "Skipping demo content creation"
+    fi
+}
+
+# Step 11: Enable additional modules
+step_enable_modules() {
+    if ! should_skip_step 11 && ask_step 11 "Enable additional recommended modules"; then
+        step_header 11 "Enabling Additional Modules"
+        
+        print_status "Checking for workflow_assignment module..."
+        
+        if [ -d "html/modules/contrib/workflow_assignment" ] || [ -d "html/modules/custom/workflow_assignment" ]; then
+            print_substep "workflow_assignment module found"
+            print_substep "Enabling workflow_assignment..."
+            
+            if ddev drush pm:enable workflow_assignment -y; then
+                print_success "workflow_assignment module enabled"
+            else
+                print_warning "Could not enable workflow_assignment"
+            fi
+        else
+            print_substep "workflow_assignment module not found in project"
+        fi
+        
+        step_complete 11 "Additional module enablement"
+    else
+        print_skip "Skipping additional module enablement"
+    fi
+}
+
+# Step 12: Set file permissions
+step_set_permissions() {
+    if ! should_skip_step 12 && ask_step 12 "Set file permissions"; then
+        step_header 12 "Setting File Permissions"
+        
+        print_status "Configuring file and directory permissions..."
+        
+        # Set permissions for sites/default
+        if [ -d "html/sites/default" ]; then
+            print_substep "Setting permissions on sites/default..."
+            chmod 755 html/sites/default
+            print_success "sites/default permissions set"
+        fi
+        
+        # Set permissions for files directory
+        if [ -d "html/sites/default/files" ]; then
+            print_substep "Setting permissions on files directory..."
+            chmod -R 775 html/sites/default/files
+            print_success "files directory permissions set"
+        fi
+        
+        # Set permissions for private directory
+        if [ -d "../private" ]; then
+            print_substep "Setting permissions on private directory..."
+            chmod -R 775 ../private
+            print_success "private directory permissions set"
+        fi
+        
+        # Set settings.php permissions
+        if [ -f "html/sites/default/settings.php" ]; then
+            print_substep "Setting permissions on settings.php..."
+            chmod 444 html/sites/default/settings.php
+            print_success "settings.php permissions set (read-only)"
+        fi
+        
+        step_complete 12 "File permissions configuration"
+    else
+        print_skip "Skipping file permissions setup"
+    fi
+}
+
+# Step 13: Final verification
+step_final_verification() {
+    if ! should_skip_step 13 && ask_step 13 "Perform final verification"; then
+        step_header 13 "Performing Final Verification"
+        
+        print_status "Running comprehensive system checks..."
+        
+        # Check Drupal status
+        print_substep "Checking Drupal status..."
+        if ddev drush status --format=json &>/dev/null; then
+            print_success "Drupal is responding correctly"
+        else
+            print_warning "Drupal status check failed"
+        fi
+        
+        # Check database connection
+        print_substep "Verifying database connection..."
+        if ddev drush sqlq "SELECT COUNT(*) FROM users" &>/dev/null; then
+            local user_count=$(ddev drush sqlq "SELECT COUNT(*) FROM users")
+            print_success "Database connection verified ($user_count users found)"
+        else
+            print_warning "Database verification failed"
+        fi
+        
+        # Check web server
+        print_substep "Checking web server response..."
+        local site_url=$(ddev describe | grep "Primary URL" | awk '{print $3}')
+        if curl -s -o /dev/null -w "%{http_code}" "$site_url" | grep -q "200"; then
+            print_success "Web server responding correctly"
+        else
+            print_warning "Web server check failed"
+        fi
+        
+        # List enabled modules
+        print_substep "Checking enabled modules..."
+        local module_count=$(ddev drush pm:list --status=enabled --no-core | wc -l)
+        print_success "$module_count contrib/custom modules enabled"
+        
+        step_complete 13 "Final verification"
+    else
+        print_skip "Skipping final verification"
+    fi
+}
+
+# Step 14: Display completion information
+step_display_completion() {
+    if ! should_skip_step 14 && ask_step 14 "Display completion information"; then
+        step_header 14 "Installation Complete!"
+        
+        local site_url=$(ddev describe | grep "Primary URL" | awk '{print $3}')
+        local login_link=$(ddev drush user:login --uri="$site_url")
+        
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo -e "${GREEN}✓ OpenSocial Installation Completed Successfully!${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo -e "${CYAN}Site Information:${NC}"
+        echo "  • Project Name: $PROJECT_URL"
+        echo "  • Site URL: $site_url"
+        echo "  • Admin Username: $ADMIN_USER"
+        echo "  • Admin Password: $ADMIN_PASS"
+        echo ""
+        echo -e "${CYAN}Quick Access:${NC}"
+        echo "  • One-time login link:"
+        echo "    $login_link"
+        echo ""
+        echo -e "${CYAN}Useful Commands:${NC}"
+        echo "  • Access site: ddev launch"
+        echo "  • Stop site: ddev stop"
+        echo "  • Restart site: ddev restart"
+        echo "  • Admin login: ddev drush user:login"
+        echo "  • Clear cache: ddev drush cache:rebuild"
+        echo "  • View logs: ddev logs"
+        echo ""
+        echo -e "${CYAN}Project Location:${NC}"
+        echo "  $OPENSOCIAL_DIR"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        step_complete 14 "Installation summary displayed"
+    else
+        print_skip "Skipping completion information display"
+    fi
+}
+
+################################################################################
+# Main Installation Flow
+################################################################################
+
+show_help() {
+    cat << EOF
+OpenSocial (Drupal) Installation Script
+
+Usage: $0 [OPTIONS] [PROJECT_NAME]
+
+Options:
+    -h, --help              Show this help message
+    -i, --interactive       Run in interactive mode (ask before each step)
+    -t, --token TOKEN       Set GitHub authentication token
+    
+Environment Variables:
+    GITHUB_TOKEN           GitHub personal access token for Composer
+                          Generate at: https://github.com/settings/tokens
+                          Required scopes: repo (for private repos)
+                          
+    Examples:
+      export GITHUB_TOKEN='ghp_xxxxxxxxxxxx'
+      GITHUB_TOKEN='ghp_xxxx' $0 myproject
+
+Arguments:
+    PROJECT_NAME           Name for the project (default: opensocial)
+
+Examples:
+    $0                     # Install with default settings
+    $0 mysite              # Install with project name 'mysite'
+    $0 -i                  # Interactive installation
+    $0 -t ghp_xxxx mysite  # Install with GitHub token
+
+For more information, visit:
+    https://github.com/rjzaar/commons_install
+
+EOF
+}
+
+main() {
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -i|--interactive)
+                INTERACTIVE_MODE=true
+                shift
+                ;;
+            -t|--token)
+                GITHUB_TOKEN="$2"
+                shift 2
+                ;;
+            *)
+                PROJECT_NAME="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Display header
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${MAGENTA}OpenSocial (Drupal) Installation Script${NC}"
+    echo -e "${CYAN}Automated DDEV-based installation for OpenSocial communities${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        print_status "Running in interactive mode"
     fi
     
-    # Clear cache
-    ddev drush cr
+    if [ -n "$GITHUB_TOKEN" ]; then
+        print_status "GitHub token configured (enhanced API access)"
+    else
+        print_warning "No GitHub token set (rate limits may apply)"
+    fi
     
-    step_complete 16 "Test content with workflow created"
-else
-    print_skip "Skipping test content creation"
-fi
+    echo ""
+    
+    # Execute installation steps
+    step_preflight
+    step_setup_directory
+    step_create_composer_project
+    step_create_private_directory
+    step_initialize_ddev
+    step_start_ddev
+    step_configure_github_token
+    step_install_dependencies
+    step_install_drupal
+    step_configure_site
+    step_create_demo_content
+    step_enable_modules
+    step_set_permissions
+    step_final_verification
+    step_display_completion
+    
+    echo ""
+    echo -e "${GREEN}🎉 All done! Enjoy your new OpenSocial site! 🎉${NC}"
+    echo ""
+}
 
-# Step 17: Generate admin login link and display completion information
-step_header 17 "Installation Complete - Generate Admin Login"
-print_status "Generating one-time admin login link..."
-
-# Generate the admin login URL
-ADMIN_LOGIN_URL=$(ddev drush uli --no-browser 2>/dev/null)
-
-if [ -n "$ADMIN_LOGIN_URL" ]; then
-    print_status "✓ Admin login link generated"
-else
-    print_warning "Could not generate login link automatically"
-    ADMIN_LOGIN_URL="Run: ddev drush uli"
-fi
-
-print_status "=================================="
-print_status "OpenSocial installation complete!"
-print_status "=================================="
-echo ""
-print_status "Installation location: $SCRIPT_DIR/$PROJECT_NAME"
-print_status "Project URL: https://$PROJECT_NAME.ddev.site"
-print_status "Admin username: $ADMIN_USER"
-print_status "Admin password: $ADMIN_PASS"
-print_status "Admin email: $ADMIN_MAIL"
-echo ""
-print_status "🔐 ONE-TIME ADMIN LOGIN LINK:"
-echo ""
-echo -e "${GREEN}$ADMIN_LOGIN_URL${NC}"
-echo ""
-print_status "Site Configuration:"
-echo "  Site name: $SITE_NAME"
-echo "  Timezone: $SITE_TIMEZONE"
-echo "  PHP version: $PHP_VERSION"
-echo "  MySQL version: $MYSQL_VERSION"
-echo "  Node.js version: $NODEJS_VERSION"
-echo ""
-print_status "Installed Features:"
-echo "  ✓ Core OpenSocial modules"
-echo "  ✓ Admin Toolbar with tools"
-echo "  ✓ Pathauto for clean URLs"
-echo "  ✓ Development settings configured"
-echo "  ✓ User registration (admin approval required)"
-echo "  ✓ Email verification enabled"
-echo "  ✓ Workflow Assignment module enabled"
-echo "  ✓ Workflow configured for basic_page"
-echo "  ✓ Test page created with workflow"
-echo ""
-print_status "Test Content:"
-echo "  Node: 'test' (basic_page)"
-echo "  Workflow: basic_page_workflow"
-echo "  Assignments: 'one' and 'two' (assigned to admin)"
-echo ""
-print_status "Useful DDEV commands:"
-echo "  ddev start          - Start the project"
-echo "  ddev stop           - Stop the project"
-echo "  ddev restart        - Restart the project"
-echo "  ddev ssh            - SSH into web container"
-echo "  ddev drush          - Run Drush commands"
-echo "  ddev composer       - Run Composer commands"
-echo "  ddev describe       - Show project information"
-echo "  ddev logs           - View container logs"
-echo "  ddev exec npm       - Run npm commands"
-echo ""
-print_status "Common Drush commands:"
-echo "  ddev drush cr       - Clear cache"
-echo "  ddev drush uli      - Generate one-time login link"
-echo "  ddev drush status   - Show site status"
-echo "  ddev drush pml      - List installed modules"
-echo ""
-print_status "To access your site:"
-echo "  1. Run: ddev launch"
-echo "  2. Or visit: https://$PROJECT_NAME.ddev.site"
-echo "  3. Or use the one-time login link above"
-echo ""
-print_status "To view the test page with workflow:"
-if [ -n "$TEST_NID" ] && [ "$TEST_NID" != "error" ]; then
-    echo "  Visit: https://$PROJECT_NAME.ddev.site/node/$TEST_NID"
-fi
-echo ""
-print_warning "IMPORTANT SECURITY REMINDERS:"
-echo "  1. Change the admin password after first login!"
-echo "  2. Update the site email in admin/config/system/site-information"
-echo "  3. Review user permissions at admin/people/permissions"
-echo "  4. For production, disable development settings in settings.local.php"
-echo "  5. Review and configure workflow settings as needed"
-
-# Optional: Launch the site in browser and open to the test page
-print_status "Opening admin login in browser..."
-ddev drush uli
-
-print_status "Installation script completed successfully!"
+# Run main function
+main "$@"
