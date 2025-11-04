@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.1.5 - Fixed Step 5 to verify project type and database, not just project name
 # v2.1.3 - Fixed project type to drupal10, changed database to mariadb:10.11
 # v2.1.2 - Fixed database type mismatch, added explicit mysql:8.0, cleanup old projects
 # v2.1.1 - Fixed find_available_url output capture issue
@@ -20,7 +21,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.3"
+VERSION="2.1.5"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -805,26 +806,53 @@ step_initialize_ddev() {
     if [ -f ".ddev/config.yaml" ]; then
         print_substep "DDEV configuration file already exists"
         
-        # Verify it's correct
-        if grep -q "name: $PROJECT_URL" .ddev/config.yaml 2>/dev/null; then
-            print_success "Configuration is valid"
+        # Check if configuration is correct
+        local config_valid=true
+        local config_issues=()
+        
+        # Check project name
+        if ! grep -q "name: $PROJECT_URL" .ddev/config.yaml 2>/dev/null; then
+            config_valid=false
+            config_issues+=("project name doesn't match")
+        fi
+        
+        # Check project type
+        if ! grep -q "type: drupal10" .ddev/config.yaml 2>/dev/null; then
+            config_valid=false
+            config_issues+=("project type is not drupal10")
+        fi
+        
+        # Check database version
+        if ! grep -q "mariadb:10.11" .ddev/config.yaml 2>/dev/null; then
+            config_valid=false
+            config_issues+=("database is not mariadb:10.11")
+        fi
+        
+        if [ "$config_valid" = true ]; then
+            print_success "Configuration is valid (drupal10 + mariadb:10.11)"
             step_complete 5 "DDEV initialization (existing)"
             return 0
         else
-            print_warning "Configuration exists but project name doesn't match"
+            print_warning "Configuration exists but has issues: ${config_issues[*]}"
             
-            # Only prompt in interactive mode
-            if [ "$INTERACTIVE_MODE" = true ]; then
-                read -p "Reconfigure DDEV? (y/N): " -n 1 -r
+            # In non-interactive mode, always reconfigure if config is wrong
+            if [ "$INTERACTIVE_MODE" != true ]; then
+                print_status "Auto-reconfiguring DDEV (non-interactive mode)"
+                # Stop DDEV before reconfiguring
+                print_substep "Stopping DDEV to reconfigure..."
+                ddev stop 2>/dev/null || true
+                # Continue to reconfiguration below
+            else
+                read -p "Reconfigure DDEV? (Y/n): " -n 1 -r
                 echo ""
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                if [[ $REPLY =~ ^[Nn]$ ]]; then
+                    print_warning "Keeping existing configuration - may cause issues!"
                     step_complete 5 "DDEV initialization (kept existing)"
                     return 0
                 fi
-            else
-                print_status "Using existing configuration (non-interactive mode)"
-                step_complete 5 "DDEV initialization (kept existing)"
-                return 0
+                # Stop DDEV before reconfiguring
+                print_substep "Stopping DDEV to reconfigure..."
+                ddev stop 2>/dev/null || true
             fi
         fi
     fi
