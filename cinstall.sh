@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.7.0 - CRITICAL: Remove docker-compose files, force remove ALL opensocial volumes
 # v2.6.0 - FOUND IT: Remove non-DDEV volumes (docker-compose) matching project name
 # v2.5.0 - DIAGNOSTICS: Show all volumes before/after, check for mysql references everywhere
 # v2.4.0 - NUCLEAR: Remove ALL DDEV volumes system-wide, stop all containers first
@@ -31,7 +32,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.6.0"
+VERSION="2.7.0"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -983,16 +984,45 @@ step_initialize_ddev() {
     # CRITICAL: Also remove non-DDEV volumes that match our project name
     # These are from docker-compose or other tools, and DDEV detects them!
     print_status "Removing non-DDEV volumes matching project name..."
-    local project_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^${PROJECT_URL}" || true)
-    if [ -n "$project_volumes" ]; then
-        print_warning "Found non-DDEV volumes for project: $PROJECT_URL"
-        echo "$project_volumes" | while read -r volume; do
-            print_substep "Removing: $volume"
-            docker volume rm "$volume" 2>/dev/null || true
+    
+    # Get all volumes that start with project name (opensocial, opensocial1, opensocial2, etc.)
+    local project_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^${PROJECT_URL}[0-9]*-" || true)
+    local exact_match=$(docker volume ls --format "{{.Name}}" | grep -E "^${PROJECT_URL}$" || true)
+    local all_project_volumes="${project_volumes}${exact_match:+$'\n'}${exact_match}"
+    
+    if [ -n "$all_project_volumes" ]; then
+        print_warning "Found $(echo "$all_project_volumes" | wc -l) non-DDEV volumes for project"
+        echo "$all_project_volumes" | while read -r volume; do
+            if [ -n "$volume" ]; then
+                print_substep "Force removing: $volume"
+                docker volume rm -f "$volume" 2>/dev/null || {
+                    print_warning "Could not remove $volume (may be in use)"
+                    # Try to find what's using it
+                    local using=$(docker ps -a --filter volume="$volume" --format "{{.Names}}" || true)
+                    if [ -n "$using" ]; then
+                        print_substep "In use by container: $using"
+                        docker rm -f "$using" 2>/dev/null || true
+                        docker volume rm -f "$volume" 2>/dev/null || true
+                    fi
+                }
+            fi
         done
-        print_success "Non-DDEV project volumes removed"
+        print_success "Attempted to remove all project volumes"
     else
         print_substep "No non-DDEV project volumes found"
+    fi
+    
+    # Also check for common OpenSocial volume names
+    print_substep "Checking for OpenSocial-specific volumes..."
+    local os_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "(social|drupal_social)" || true)
+    if [ -n "$os_volumes" ]; then
+        print_warning "Found OpenSocial/Drupal Social volumes"
+        echo "$os_volumes" | while read -r volume; do
+            if [ -n "$volume" ]; then
+                print_substep "Removing: $volume"
+                docker volume rm -f "$volume" 2>/dev/null || true
+            fi
+        done
     fi
     if [ -n "$all_ddev_volumes" ]; then
         print_substep "Found $(echo "$all_ddev_volumes" | wc -l) DDEV volumes"
@@ -1031,6 +1061,37 @@ step_initialize_ddev() {
         fi
     fi
     print_success "Verified: No DDEV volumes exist"
+    
+    # CRITICAL: Check for docker-compose.yml files in project
+    # OpenSocial includes docker-compose which conflicts with DDEV
+    print_status "Checking for conflicting docker-compose files..."
+    
+    # Remove or rename project's docker-compose files
+    if [ -f "docker-compose.yml" ] || [ -f "docker-compose.yaml" ]; then
+        print_warning "Found docker-compose files - these conflict with DDEV!"
+        print_substep "Renaming to prevent DDEV from using them..."
+        
+        if [ -f "docker-compose.yml" ]; then
+            mv docker-compose.yml docker-compose.yml.backup 2>/dev/null || rm -f docker-compose.yml
+            print_substep "Renamed: docker-compose.yml → docker-compose.yml.backup"
+        fi
+        
+        if [ -f "docker-compose.yaml" ]; then
+            mv docker-compose.yaml docker-compose.yaml.backup 2>/dev/null || rm -f docker-compose.yaml
+            print_substep "Renamed: docker-compose.yaml → docker-compose.yaml.backup"
+        fi
+        
+        print_success "Docker-compose files backed up and removed"
+    else
+        print_substep "No conflicting docker-compose files found"
+    fi
+    
+    # Remove ALL .ddev directory to start completely fresh
+    print_substep "Removing entire .ddev directory for fresh start..."
+    if [ -d ".ddev" ]; then
+        rm -rf .ddev
+        print_success "Removed .ddev directory"
+    fi
     
     # DIAGNOSTIC: Show ALL Docker volumes to user
     print_status "Current Docker volumes on system:"
