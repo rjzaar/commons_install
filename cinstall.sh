@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.7.2 - CRITICAL: Restart DDEV after config creation to apply PHP 8.3
 # v2.7.1 - Fixed: Changed PHP version to 8.3 (required by dependencies)
 # v2.7.0 - CRITICAL: Remove docker-compose files, force remove ALL opensocial volumes
 # v2.6.0 - FOUND IT: Remove non-DDEV volumes (docker-compose) matching project name
@@ -33,7 +34,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.7.1"
+VERSION="2.7.2"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -1173,6 +1174,31 @@ step_start_ddev() {
     
     if ddev start; then
         print_success "DDEV containers started successfully"
+        
+        # CRITICAL: Restart to apply PHP version from config
+        print_substep "Restarting to apply PHP 8.3 configuration..."
+        ddev restart
+        print_success "DDEV restarted with PHP 8.3"
+        
+        # Verify PHP version
+        print_substep "Verifying PHP version..."
+        local php_version=$(ddev exec php -v | head -n1 | grep -oP "PHP \K[0-9]+\.[0-9]+" || echo "unknown")
+        if [[ "$php_version" == "8.3" ]]; then
+            print_success "PHP version confirmed: $php_version"
+        else
+            print_error "PHP version is $php_version, expected 8.3"
+            print_warning "Attempting one more restart..."
+            ddev restart
+            sleep 5
+            php_version=$(ddev exec php -v | head -n1 | grep -oP "PHP \K[0-9]+\.[0-9]+" || echo "unknown")
+            if [[ "$php_version" == "8.3" ]]; then
+                print_success "PHP version confirmed after retry: $php_version"
+            else
+                print_error "Still running PHP $php_version after restart"
+                print_error "You may need to run: ddev restart"
+                exit 1
+            fi
+        fi
         
         print_substep "Verifying container status..."
         if ddev describe &>/dev/null; then
