@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.5.0 - DIAGNOSTICS: Show all volumes before/after, check for mysql references everywhere
 # v2.4.0 - NUCLEAR: Remove ALL DDEV volumes system-wide, stop all containers first
 # v2.3.0 - BREAKTHROUGH: Create config.yaml manually to bypass ddev config's database checks
 # v2.2.0 - Fixed: Complete DDEV state cleanup (poweroff + ~/.ddev/ configs + all Docker)
@@ -29,7 +30,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.4.0"
+VERSION="2.5.0"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -1001,6 +1002,12 @@ step_initialize_ddev() {
     fi
     print_success "Verified: No DDEV volumes exist"
     
+    # DIAGNOSTIC: Show ALL Docker volumes to user
+    print_status "Current Docker volumes on system:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    docker volume ls
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
     print_status "Creating DDEV configuration manually..."
     print_substep "Bypassing ddev config to avoid database checks"
     
@@ -1089,6 +1096,26 @@ step_start_ddev() {
         fi
     else
         print_error "Failed to start DDEV containers"
+        
+        # DIAGNOSTIC: Show what volumes exist after the failure
+        echo ""
+        print_error "DIAGNOSTIC: Volumes that exist after ddev start failed:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        docker volume ls
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Show our config file
+        print_error "DIAGNOSTIC: Our config.yaml says:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        cat .ddev/config.yaml | grep -A5 "database:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Check for any mysql references in .ddev/
+        print_error "DIAGNOSTIC: Checking .ddev/ for mysql references:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        grep -r "mysql" .ddev/ 2>/dev/null || echo "No mysql references found"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
         exit 1
     fi
     
