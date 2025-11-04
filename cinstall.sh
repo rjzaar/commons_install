@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.7.1 - Fixed: Changed PHP version to 8.3 (required by dependencies)
 # v2.7.0 - CRITICAL: Remove docker-compose files, force remove ALL opensocial volumes
 # v2.6.0 - FOUND IT: Remove non-DDEV volumes (docker-compose) matching project name
 # v2.5.0 - DIAGNOSTICS: Show all volumes before/after, check for mysql references everywhere
@@ -32,7 +33,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.7.0"
+VERSION="2.7.1"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -1111,7 +1112,7 @@ step_initialize_ddev() {
 name: PROJECT_NAME_PLACEHOLDER
 type: drupal10
 docroot: html
-php_version: "8.2"
+php_version: "8.3"
 webserver_type: nginx-fpm
 xdebug_enabled: false
 additional_hostnames: []
@@ -1635,6 +1636,7 @@ step_display_completion() {
     echo "  • Admin Username: $ADMIN_USER"
     echo "  • Admin Password: $ADMIN_PASS"
     echo "  • Database: MariaDB 10.11 (ONLY)"
+    echo "  • PHP Version: 8.3"
     echo "  • Project Type: Drupal 10"
     echo ""
     echo -e "${CYAN}Quick Access:${NC}"
@@ -1710,7 +1712,7 @@ Examples:
 Configuration:
     Project Type: Drupal 10 (enables drush commands)
     Database: MariaDB 10.11 ONLY (no MySQL support)
-    PHP Version: 8.2
+    PHP Version: 8.3
     
     Note: This script ONLY uses MariaDB. If an existing MySQL 
     database is detected, it will be automatically deleted and 
@@ -1778,7 +1780,7 @@ main() {
     echo -e "${MAGENTA}OpenSocial (Drupal) Installation Script${NC}"
     echo -e "${CYAN}Automated DDEV-based installation with smart resume${NC}"
     echo -e "${BLUE}Version: $VERSION${NC}"
-    echo -e "${GREEN}Database: MariaDB 10.11 ONLY | Project Type: Drupal 10${NC}"
+    echo -e "${GREEN}Database: MariaDB 10.11 ONLY | PHP: 8.3 | Project Type: Drupal 10${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
