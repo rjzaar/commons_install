@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.7.6 - Fixed: Here-document syntax in ddev exec, removed incorrect step markers
 # v2.7.5 - Fixed: Check for complete $settings line with assignment operator
 # v2.7.4 - Fixed: Check for full $settings['file_private_path'] line, not just substring
 # v2.7.3 - CRITICAL: Configure private file system (required by OpenSocial)
@@ -37,7 +38,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.7.5"
+VERSION="2.7.6"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -1354,6 +1355,8 @@ step_install_drupal() {
         return 0
     fi
     
+    step_header 9 "Installing Drupal with OpenSocial Profile"
+    
     print_status "Configuring private file system (required by OpenSocial)..."
     
     # Create private files directory
@@ -1369,38 +1372,80 @@ step_install_drupal() {
     # Configure private file path in settings.ddev.php
     print_substep "Configuring private file path in settings..."
     
-    # Check if settings.ddev.php exists, if not create it
-    if [ ! -f "html/sites/default/settings.ddev.php" ]; then
-        print_substep "Creating settings.ddev.php..."
-        ddev exec "cat > /var/www/html/sites/default/settings.ddev.php << 'SETTINGSEOF'
-<?php
-/**
- * @file
- * DDEV-specific settings.
- */
 
-// Private file system path (required by OpenSocial)
-\$settings['file_private_path'] = '/var/www/html/sites/default/files/private';
-SETTINGSEOF"
-        print_success "settings.ddev.php created with private file path"
-    else
-        # Check if private path is already configured (check for complete line with assignment)
-        if ! ddev exec grep -q "\$settings\['file_private_path'\] =  '../private';"  "/var/www/html/sites/default/settings.ddev.php" 2>/dev/null; then
-            print_substep "Adding private file path to existing settings.ddev.php..."
-            ddev exec "cat >> /var/www/html/sites/default/settings.ddev.php << 'SETTINGSEOF'
-
-// Private file system path (required by OpenSocial)
-\$settings['file_private_path'] = '/var/www/html/sites/default/files/private';
-SETTINGSEOF"
-            print_success "Private file path added to settings.ddev.php"
+        # CRITICAL: Prepare settings.php BEFORE running site:install
+        print_status "Preparing settings.php before installation..."
+        
+        SETTINGS_FILE="html/sites/default/settings.php"
+        DEFAULT_SETTINGS="html/sites/default/default.settings.php"
+        SETTINGS_ABS_PATH="$CURRENT_DIR/$SETTINGS_FILE"
+        
+        print_status "  Settings file: $SETTINGS_ABS_PATH"
+        
+        # Ensure default directory is writable
+        chmod 755 html/sites/default
+        
+        # If settings.php doesn't exist, create it from default
+        if [ ! -f "$SETTINGS_FILE" ]; then
+            if [ -f "$DEFAULT_SETTINGS" ]; then
+                print_status "Creating settings.php from default.settings.php..."
+                print_status "  Source: $CURRENT_DIR/$DEFAULT_SETTINGS"
+                print_status "  Target: $SETTINGS_ABS_PATH"
+                cp "$DEFAULT_SETTINGS" "$SETTINGS_FILE"
+                print_status "✓ Created settings.php"
+            fi
         else
-            print_substep "Private file path already configured"
+            print_skip "settings.php already exists at: $SETTINGS_ABS_PATH"
         fi
-    fi
-    
-    step_complete 8 "Private file system configuration"
-    
-    step_header 9 "Installing Drupal with OpenSocial Profile"
+        
+        # Make settings.php writable for installation
+        chmod 666 "$SETTINGS_FILE"
+        print_status "Set $SETTINGS_FILE to writable (666)"
+        
+        # Add private file path BEFORE installation (OpenSocial checks this during install)
+        if ! grep -q "\$settings\['file_private_path'\] =  '../private';" "$SETTINGS_FILE"; then
+            print_status "Adding private file path to settings.php..."
+            print_status "  File: $SETTINGS_ABS_PATH"
+            print_status "  Adding: \$settings['file_private_path'] = '../private';"
+            cat >> "$SETTINGS_FILE" <<'PRIVATEOF'
+
+/**
+ * Private file path configuration.
+ * 
+ * This directory should be outside the web root for security.
+ * This is REQUIRED by OpenSocial distribution before installation.
+ */
+$settings['file_private_path'] = '../private';
+PRIVATEOF
+            print_status "✓ Private file path added to: $SETTINGS_ABS_PATH"
+        else
+            print_skip "Private file path already in: $SETTINGS_ABS_PATH"
+        fi
+        
+        # Ensure settings.ddev.php will be included (DDEV creates this file)
+        SETTINGS_DDEV="html/sites/default/settings.ddev.php"
+        SETTINGS_DDEV_ABS="$CURRENT_DIR/$SETTINGS_DDEV"
+        if ! grep -q "settings.ddev.php" "$SETTINGS_FILE"; then
+            print_status "Adding settings.ddev.php inclusion..."
+            print_status "  To file: $SETTINGS_ABS_PATH"
+            print_status "  Will include: $SETTINGS_DDEV_ABS (auto-generated by DDEV)"
+            cat >> "$SETTINGS_FILE" <<'DDEVEOF'
+
+/**
+ * Automatically generated include for settings managed by ddev.
+ */
+$ddev_settings = dirname(__FILE__) . '/settings.ddev.php';
+if (getenv('IS_DDEV_PROJECT') == 'true' && is_readable($ddev_settings)) {
+  require $ddev_settings;
+}
+DDEVEOF
+            print_status "✓ settings.ddev.php inclusion added to: $SETTINGS_ABS_PATH"
+        else
+            print_skip "settings.ddev.php inclusion already in: $SETTINGS_ABS_PATH"
+        fi
+            
+
+   
     
     # Check if Drupal is already installed
     if ddev drush status bootstrap 2>/dev/null | grep -q "Successful"; then
