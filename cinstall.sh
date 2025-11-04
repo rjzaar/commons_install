@@ -9,6 +9,7 @@
 # including configuration, sample content, and GitHub token support.
 #
 # Changelog:
+# v2.2.0 - Fixed: Complete DDEV state cleanup (poweroff + ~/.ddev/ configs + all Docker)
 # v2.1.9 - Fixed: Comprehensive Docker cleanup (containers, volumes, networks) before config
 # v2.1.8 - Fixed: Check and remove orphaned Docker volumes (MySQL persisting outside DDEV)
 # v2.1.7 - Fixed: Check for DDEV projects globally before configuring (fixes MySQL persistence)
@@ -26,7 +27,7 @@
 set -e  # Exit on any error
 
 # Script version
-VERSION="2.1.9"
+VERSION="2.2.0"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -795,8 +796,44 @@ step_initialize_ddev() {
     
     step_header 5 "Initializing DDEV Configuration"
     
-    # CRITICAL: Complete Docker cleanup before attempting configuration
-    # DDEV checks existing containers/volumes/networks for database type
+    # CRITICAL: Shut down ALL DDEV services to clear any cached state
+    print_status "Shutting down all DDEV services..."
+    print_substep "This clears DDEV's internal state and cached configurations"
+    ddev poweroff 2>/dev/null || true
+    sleep 2
+    print_success "All DDEV services stopped"
+    
+    # CRITICAL: DDEV stores project configs in ~/.ddev/ that persist across installations
+    print_status "Cleaning DDEV's global configuration files..."
+    
+    # Check for project-specific config in ~/.ddev/
+    if [ -d "$HOME/.ddev" ]; then
+        print_substep "Checking ~/.ddev/ for project configs..."
+        
+        # Remove any project-specific config files
+        local config_files=$(find "$HOME/.ddev" -type f -name "*${PROJECT_URL}*" 2>/dev/null || true)
+        if [ -n "$config_files" ]; then
+            print_warning "Found project config files in ~/.ddev/"
+            echo "$config_files" | while read -r file; do
+                print_substep "Removing: $file"
+                rm -f "$file" 2>/dev/null || true
+            done
+            print_success "Global config files removed"
+        else
+            print_substep "No project config files in ~/.ddev/"
+        fi
+        
+        # Also check for any .yaml files that mention this project
+        if grep -r "name: $PROJECT_URL" "$HOME/.ddev/" 2>/dev/null | cut -d: -f1 | sort -u | while read -r file; do
+            print_substep "Removing config file mentioning project: $file"
+            rm -f "$file" 2>/dev/null || true
+        done; then
+            print_substep "Cleaned up any config files mentioning project"
+        fi
+    else
+        print_substep "~/.ddev/ directory doesn't exist"
+    fi
+    
     print_status "Performing comprehensive Docker cleanup for project: $PROJECT_URL"
     
     # Step 1: Check DDEV's project list
@@ -881,12 +918,17 @@ step_initialize_ddev() {
             step_complete 5 "DDEV initialization (existing valid config)"
             return 0
         else
-            print_warning "Config file exists but is incorrect - will recreate"
+            print_warning "Config file has incorrect settings - removing entire .ddev directory"
             print_substep "Stopping DDEV..."
             ddev stop 2>/dev/null || true
-            print_substep "Removing incorrect config..."
-            rm -f .ddev/config.yaml
+            print_substep "Removing .ddev directory..."
+            rm -rf .ddev
+            print_success ".ddev directory removed"
         fi
+    elif [ -d ".ddev" ]; then
+        print_warning ".ddev directory exists without config.yaml - removing it"
+        rm -rf .ddev
+        print_success ".ddev directory removed"
     fi
     
     print_status "Configuring DDEV for project: $PROJECT_URL"
